@@ -15,6 +15,25 @@ Installed in `go/bin/` and exposed on `PATH` through `~/.local/bin` symlinks.
   v0.28.0, whose SSA builder panics on Go 1.27 syntax.
 - `fieldgraph` — struct/field read/write graph for a package.
 
+## Setup
+
+From a fresh checkout:
+
+```bash
+./go/callgraph-build
+./go/go-callvis-build
+./go/fieldgraph-build
+
+ln -sfn "$PWD/go/bin/callgraph" "$HOME/.local/bin/callgraph"
+ln -sfn "$PWD/go/bin/go-callvis" "$HOME/.local/bin/go-callvis"
+ln -sfn "$PWD/go/bin/fieldgraph" "$HOME/.local/bin/fieldgraph"
+ln -sfn "$PWD/go/cg" "$HOME/.local/bin/cg"
+```
+
+`~/.local/bin` must be on `PATH`. The root `bin`, `out`, and `go-callvis`
+symlinks are only local compatibility shortcuts; a fresh clone does not need
+them.
+
 ## Scripts
 
 - `cg` — wraps `callgraph`, filters to the current module, renders DOT and SVG.
