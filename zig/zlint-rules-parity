@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Strict parity: bundled zlint rules vs external OrchEngine rules.
+#
+# Runs both binaries over:
+#   1. a project snapshot (default: orchengine-zig)
+#   2. the all-rule parity fixture in zlint_rules/testdata/parity
+#
+# Fails unless normalized JSON findings, stderr-relevant behavior, and exit
+# codes match exactly.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+zlint_dir="${ZLINT_DIR:-$HOME/Projects/orchengine-zig/tools/zlint}"
+project="${1:-$HOME/Projects/orchengine-zig}"
+fixture="$src/zlint_rules/testdata/parity"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+if [ ! -f "$zlint_dir/build.zig" ]; then
+    echo "zlint-rules-parity: not a zlint checkout: $zlint_dir" >&2
+    exit 1
+fi
+if [ ! -d "$project" ]; then
+    echo "zlint-rules-parity: no project: $project" >&2
+    exit 1
+fi
+if [ ! -d "$fixture" ]; then
+    echo "zlint-rules-parity: missing fixture: $fixture" >&2
+    exit 1
+fi
+
+args=()
+for rule in "$src"/zlint_rules/*.zig; do
+    args+=("-Dcustom_rules=$rule")
+done
+
+cd "$zlint_dir"
+zig build -Doptimize=ReleaseSafe -Dversion=parity-bundled --prefix "$tmp/bundled"
+zig build -Doptimize=ReleaseSafe -Dversion=parity-external --prefix "$tmp/external" "${args[@]}"
+
+run_case() {
+    local name="$1" dir="$2"
+    local config=()
+    if [ -f "$dir/zlint.json" ]; then
+        config=(-c "$dir/zlint.json")
+    fi
+
+    local bundled_status external_status
+    set +e
+    (
+        cd "$dir"
+        "$tmp/bundled/bin/zlint" "${config[@]}" --format json . >"$tmp/$name.bundled.json" 2>"$tmp/$name.bundled.err"
+    )
+    bundled_status=$?
+    (
+        cd "$dir"
+        "$tmp/external/bin/zlint" "${config[@]}" --format json . >"$tmp/$name.external.json" 2>"$tmp/$name.external.err"
+    )
+    external_status=$?
+    set -e
+
+    sort "$tmp/$name.bundled.json" >"$tmp/$name.bundled.sorted"
+    sort "$tmp/$name.external.json" >"$tmp/$name.external.sorted"
+
+    local failed=0
+    if ! diff -u "$tmp/$name.bundled.sorted" "$tmp/$name.external.sorted" >"$tmp/$name.diff"; then
+        echo "zlint parity [$name]: FINDINGS DIFFER" >&2
+        cat "$tmp/$name.diff" >&2
+        failed=1
+    fi
+    if [ "$bundled_status" -ne "$external_status" ]; then
+        echo "zlint parity [$name]: EXIT STATUS DIFFERS (bundled=$bundled_status external=$external_status)" >&2
+        failed=1
+    fi
+    if [ "$failed" -ne 0 ]; then
+        exit 1
+    fi
+
+    echo "zlint parity [$name]: OK ($(wc -l <"$tmp/$name.bundled.sorted") findings, exit $bundled_status)"
+}
+
+run_case project "$project"
+run_case fixture "$fixture"

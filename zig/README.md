@@ -3,6 +3,48 @@
 Static analysis for Zig projects, built for `~/Projects/orchengine-zig`. Like
 the Go tools, nothing here is imported by the analyzed project.
 
+## zlint rules
+
+OrchEngine's per-file zlint rules live in `zlint_rules/` and are compiled into
+a zlint binary at build time. The zlint fork at `orchengine-zig/tools/zlint`
+only carries Zig 0.17.1 compatibility.
+
+Rules:
+
+- `max_function_lines.zig`, `max_complexity.zig`, `max_params.zig`,
+  `max_nesting.zig`
+- `production_file_size.zig`, `max_file_imports.zig`
+- `forbid_casts.zig`, `mutual_type_cycles.zig`,
+  `uncalled_private_function.zig`
+
+Build:
+
+```bash
+# default zlint checkout
+~/Projects/orchengine-tools/zig/zlint-rules-build
+
+# custom zlint checkout
+ZLINT_DIR=/path/to/zlint ~/Projects/orchengine-tools/zig/zlint-rules-build
+```
+
+The binary is written to `zig/bin/zlint-orche`. zlint compiles custom rules as
+static inputs; pass one `-Dcustom_rules=<path>` flag per rule. Comma-separated
+paths do not work.
+
+Strict parity:
+
+```bash
+~/Projects/orchengine-tools/zig/zlint-rules-parity ~/Projects/orchengine-zig
+```
+
+The script builds the fork-bundled and external variants, runs both with the
+project's `zlint.json`, and requires identical normalized JSON findings and exit
+codes on both the project snapshot and the all-rule fixture under
+`zlint_rules/testdata/parity/`.
+
+Rule thresholds, severities, and allowlists are project configuration and stay
+in the analyzed repository, not here.
+
 ## zigdepends
 
 A small NDepend-style report: dependency graph, call graph, call stacks,
