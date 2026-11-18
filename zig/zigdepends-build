@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Build zigdepends into the tools bin directory.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+dir="${TOOLS_BIN:-$src/bin}"
+mkdir -p "$dir"
+
+cd "$src"
+zig build -Doptimize=ReleaseSafe
+cp "$src/zig-out/bin/zigdepends" "$dir/zigdepends"
+echo "$dir/zigdepends"
