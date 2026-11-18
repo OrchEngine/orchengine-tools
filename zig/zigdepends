@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Run zigdepends, building it first if needed.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bin="$src/bin/zigdepends"
+if [ ! -x "$bin" ]; then
+  "$src/zigdepends-build" >/dev/null
+fi
+exec "$bin" "$@"

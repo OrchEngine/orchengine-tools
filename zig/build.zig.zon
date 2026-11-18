@@ -1,0 +1,15 @@
+.{
+    .name = .zigdepends,
+    .version = "0.1.0",
+    .fingerprint = 0x70319a94ff3bd4c1,
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "zigdepends",
+        "zigdepends-build",
+        "README.md",
+    },
+}
