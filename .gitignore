@@ -1,6 +1,9 @@
-bin/
-out/
-go-callvis/
+/bin
+/out
+/go-callvis
+/go/bin/
+/go/out/
+/go/go-callvis/
 **/node_modules/
 *.log
 .DS_Store

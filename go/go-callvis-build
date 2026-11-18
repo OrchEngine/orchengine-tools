@@ -10,7 +10,7 @@ git clone --depth 1 https://github.com/ondrajz/go-callvis "$tmp/go-callvis"
 cd "$tmp/go-callvis"
 go get golang.org/x/tools@latest
 go mod tidy
-dest="${TOOLS_BIN:-$HOME/Projects/orchengine-tools/bin}/go-callvis"
+dest="${TOOLS_BIN:-$HOME/Projects/orchengine-tools/go/bin}/go-callvis"
 mkdir -p "$(dirname "$dest")"
 go build -o "$dest" .
 "$dest" -version
@@ -18,5 +18,5 @@ go build -o "$dest" .
 resolved=$(command -v go-callvis || true)
 if [ -n "$resolved" ] && [ "$(readlink -f "$resolved")" != "$(readlink -f "$dest")" ]; then
   echo "note: 'go-callvis' resolves to $resolved, not $dest" >&2
-  echo "      point that path at $dest or put $HOME/Projects/orchengine-tools/bin earlier in PATH" >&2
+  echo "      point that path at $dest or put $HOME/Projects/orchengine-tools/go/bin earlier in PATH" >&2
 fi

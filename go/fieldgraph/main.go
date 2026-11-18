@@ -1,5 +1,5 @@
-// Command fieldgraph renders a struct/field read-write graph for an
-// OrchEngine package, including call edges and file I/O boundaries.
+// Command fieldgraph renders a struct/field read-write graph for a Go package,
+// including call edges and file I/O boundaries.
 package main
 
 import (
@@ -33,16 +33,18 @@ type options struct {
 }
 
 func run() error {
-	home, err := os.UserHomeDir()
+	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("home dir: %w", err)
+		return fmt.Errorf("working dir: %w", err)
 	}
-	defaultDir := filepath.Join(home, "Projects", "OrchEngine")
-	defaultOut := filepath.Join(home, "Projects", "orchengine-tools", "out", "editor")
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = "."
+	}
 
-	dir := flag.String("dir", defaultDir, "module root of the analyzed project")
-	pkg := flag.String("pkg", "./internal/editor", "package pattern to analyze")
-	out := flag.String("out", defaultOut, "output base path; writes .dot and .svg")
+	dir := flag.String("dir", cwd, "module root of the analyzed project")
+	pkg := flag.String("pkg", "./...", "package pattern to analyze")
+	out := flag.String("out", "", "output base path; writes .dot and .svg (default: <tools>/go/out/<dir>)")
 	tests := flag.Bool("tests", false, "include test files")
 	withIO := flag.Bool("io", true, "include file read/write nodes")
 	calls := flag.Bool("calls", false, "include call edges and the full function graph")
@@ -50,6 +52,17 @@ func run() error {
 	layout := flag.String("layout", "", "Graphviz layout: dot, neato, sfdp, fdp (default: sfdp for file/type, dot for func)")
 	focus := flag.String("focus", "", "only show structs whose name contains this text")
 	flag.Parse()
+
+	if *out == "" {
+		dirName := filepath.Base(*dir)
+		if absolute, absErr := filepath.Abs(*dir); absErr == nil {
+			dirName = filepath.Base(absolute)
+		}
+		if dirName == "" || dirName == "." || dirName == string(filepath.Separator) {
+			dirName = "graph"
+		}
+		*out = filepath.Join(home, "Projects", "orchengine-tools", "go", "out", dirName, "fieldgraph")
+	}
 
 	layoutName := *layout
 	if layoutName == "" {

@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
-# cg: render a static call graph for OrchEngine packages.
+# cg: render a static call graph for a Go module.
 # usage: cg [-a static|cha|rta|vta] [-f focus] [-o out.svg] <package pattern>...
 set -euo pipefail
 
-mod=github.com/orchengine/orchengine
+mod=${MODULE:-}
+if [ -z "$mod" ]; then
+  mod=$(go list -m -f '{{.Path}}' 2>/dev/null) || {
+    echo "cg: not inside a Go module" >&2
+    exit 1
+  }
+fi
 algo=${ALGO:-cha}
-out=${OUT:-$HOME/Projects/orchengine-tools/out/callgraph.svg}
+modfile=$(go env GOMOD 2>/dev/null || true)
+repo=graph
+if [ -n "$modfile" ] && [ "$modfile" != "/dev/null" ]; then
+  repo=$(basename "$(dirname "$modfile")")
+fi
+out=${OUT:-$HOME/Projects/orchengine-tools/go/out/$repo/callgraph.svg}
 focus=
 
 while getopts "a:f:o:" opt; do
@@ -24,7 +35,7 @@ dotfile=${out%.*}.dot
 
 callgraph -algo "$algo" -format '{{.Caller}}|{{.Dynamic}}|{{.Line}}:{{.Column}}|{{.Callee}}' "$@" |
   awk -F'|' -v mod="$mod" -v focus="$focus" '
-    ($1 ~ mod && $4 ~ mod) && (focus == "" || index($1, focus) || index($4, focus)) {
+    (index($1, mod) > 0 && index($4, mod) > 0) && (focus == "" || index($1, focus) || index($4, focus)) {
       callee = $4; sub("^" mod "/", "", callee)
       caller = $1; sub("^" mod "/", "", caller)
       style = ($2 == "dynamic") ? ", style=dashed" : ""

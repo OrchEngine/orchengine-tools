@@ -3,7 +3,7 @@
 set -euo pipefail
 
 src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dir="${TOOLS_BIN:-$HOME/Projects/orchengine-tools/bin}"
+dir="${TOOLS_BIN:-$HOME/Projects/orchengine-tools/go/bin}"
 mkdir -p "$dir"
 
 cd "$src/fieldgraph"
