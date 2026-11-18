@@ -1,0 +1,8 @@
+[Unit]
+Description=Generate the daily OpenCode AI usage review
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+Environment=XDG_STATE_HOME=%h/.local/state
+ExecStart=%h/Projects/orchengine-tools/opencode-plugins/opencode-usage-review/scripts/daily-report.sh yesterday

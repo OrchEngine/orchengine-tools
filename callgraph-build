@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Install golang.org/x/tools/cmd/callgraph into the tools bin directory.
+set -euo pipefail
+
+dir="${TOOLS_BIN:-$HOME/Projects/orchengine-tools/bin}"
+mkdir -p "$dir"
+
+GOBIN="$dir" go install golang.org/x/tools/cmd/callgraph@latest
+
+"$dir/callgraph" -h >/dev/null 2>&1 || true
+echo "$dir/callgraph"

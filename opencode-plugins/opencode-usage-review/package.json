@@ -1,0 +1,28 @@
+{
+  "name": "opencode-usage-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Daily AI usage review for OpenCode: quota, active time, rework, and outcome labels.",
+  "bin": {
+    "opencode-usage-review": "./src/cli.ts"
+  },
+  "scripts": {
+    "report": "node src/cli.ts report",
+    "week": "node src/cli.ts report --days 7",
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "^2.2.6",
+    "@opencode/theme": "^2.2.6",
+    "@opentui/core": "^0.8.3",
+    "@opentui/solid": "^0.8.3",
+    "@types/node": "^26.6.6",
+    "solid-js": "^1.9.18",
+    "typescript": "^7.0.2"
+  }
+}

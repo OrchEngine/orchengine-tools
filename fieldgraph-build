@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Build the fieldgraph analyzer into the tools bin directory.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+dir="${TOOLS_BIN:-$HOME/Projects/orchengine-tools/bin}"
+mkdir -p "$dir"
+
+cd "$src/fieldgraph"
+go build -o "$dir/fieldgraph" .
+echo "$dir/fieldgraph"

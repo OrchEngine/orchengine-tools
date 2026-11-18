@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# cg: render a static call graph for OrchEngine packages.
+# usage: cg [-a static|cha|rta|vta] [-f focus] [-o out.svg] <package pattern>...
+set -euo pipefail
+
+mod=github.com/orchengine/orchengine
+algo=${ALGO:-cha}
+out=${OUT:-$HOME/Projects/orchengine-tools/out/callgraph.svg}
+focus=
+
+while getopts "a:f:o:" opt; do
+  case $opt in
+    a) algo=$OPTARG ;;
+    f) focus=$OPTARG ;;
+    o) out=$OPTARG ;;
+    *) echo "usage: cg [-a static|cha|rta|vta] [-f focus] [-o out.svg] <pkg>..." >&2; exit 2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+[ $# -gt 0 ] || { echo "usage: cg [-a static|cha|rta|vta] [-f focus] [-o out.svg] <pkg>..." >&2; exit 2; }
+
+mkdir -p "$(dirname "$out")"
+dotfile=${out%.*}.dot
+
+callgraph -algo "$algo" -format '{{.Caller}}|{{.Dynamic}}|{{.Line}}:{{.Column}}|{{.Callee}}' "$@" |
+  awk -F'|' -v mod="$mod" -v focus="$focus" '
+    ($1 ~ mod && $4 ~ mod) && (focus == "" || index($1, focus) || index($4, focus)) {
+      callee = $4; sub("^" mod "/", "", callee)
+      caller = $1; sub("^" mod "/", "", caller)
+      style = ($2 == "dynamic") ? ", style=dashed" : ""
+      printf "\"%s\" -> \"%s\" [label=\"%s:%s\"%s];\n", caller, callee, $2, $3, style
+    }' > "$dotfile"
+
+{
+  echo 'digraph calls {'
+  echo '  rankdir=LR;'
+  echo '  node [shape=box, style="filled,rounded", fillcolor="#eef2f7", fontname="monospace", fontsize=9];'
+  echo '  edge [fontname="monospace", fontsize=7, color="#5b6b7c"];'
+  cat "$dotfile"
+  echo '}'
+} > "$dotfile.tmp" && mv "$dotfile.tmp" "$dotfile"
+
+edges=$(grep -c -- "->" "$dotfile" || true)
+dot -Tsvg "$dotfile" -o "$out"
+printf 'edges: %s\n' "$edges"
+printf 'dot:   %s\nsvg:   %s\n' "$dotfile" "$out"
