@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Build and smoke-test the pinned zlint release artifact for this host.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+version="${ZLINT_VERSION:-0.10.0-orche.1}"
+out="$src/out/release"
+
+case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) asset="zlint-linux-x86_64" ;;
+    *)
+        echo "zlint-release: unsupported host $(uname -s)-$(uname -m)" >&2
+        exit 1
+        ;;
+esac
+
+zlint_dir="$("$src/zlint-src")"
+
+args=()
+for rule in "$src"/zlint_rules/*.zig; do
+    args+=("-Dcustom_rules=$rule")
+done
+
+build() {
+    local prefix="$1"
+    shift
+    (cd "$zlint_dir" && zig build -Doptimize=ReleaseSafe -Dcpu=baseline "$@" --prefix "$prefix")
+}
+
+rm -rf "$src/.tmp/release" "$out"
+mkdir -p "$src/.tmp/release" "$out"
+
+build "$src/.tmp/release/external" -Dversion="$version" "${args[@]}"
+build "$src/.tmp/release/bundled" -Dversion=parity
+
+fixture="$src/zlint_rules/testdata/parity"
+run() {
+    local bin="$1" out_json="$2" status
+    set +e
+    (cd "$fixture" && "$bin" -c zlint.json --format json . >"$out_json" 2>/dev/null)
+    status=$?
+    set -e
+    sort "$out_json" -o "$out_json"
+    printf '%s\n' "$status" >"$out_json.status"
+}
+run "$src/.tmp/release/bundled/bin/zlint" "$src/.tmp/release/bundled.json"
+run "$src/.tmp/release/external/bin/zlint" "$src/.tmp/release/external.json"
+diff -u "$src/.tmp/release/bundled.json" "$src/.tmp/release/external.json"
+diff -u "$src/.tmp/release/bundled.json.status" "$src/.tmp/release/external.json.status"
+test "$(wc -l <"$src/.tmp/release/external.json")" -eq 12
+
+cp "$src/.tmp/release/external/bin/zlint" "$out/$asset"
+tar -C "$out" -czf "$out/$asset.tar.gz" "$asset"
+(cd "$out" && sha256sum "$asset.tar.gz" >"$asset.tar.gz.sha256")
+echo "$out/$asset.tar.gz"
+cat "$out/$asset.tar.gz.sha256"

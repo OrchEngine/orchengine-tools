@@ -1,0 +1,94 @@
+name: zlint release
+
+on:
+  push:
+    tags:
+      - "zlint-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build zlint with OrchEngine rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: Read zlint pin
+        id: pin
+        run: echo "ref=$(cat zig/zlint.lock)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout zlint
+        uses: actions/checkout@v4
+        with:
+          repository: OrchEngine/zlint
+          ref: ${{ steps.pin.outputs.ref }}
+          path: .zlint
+          fetch-depth: 0
+
+      - name: Build with OrchEngine rules
+        run: |
+          set -euo pipefail
+          args=()
+          for rule in "$PWD"/zig/zlint_rules/*.zig; do
+            args+=("-Dcustom_rules=$rule")
+          done
+          version="${GITHUB_REF_NAME#zlint-v}"
+          cd .zlint
+          zig build \
+            -Doptimize=ReleaseSafe \
+            -Dcpu=baseline \
+            -Dversion="$version" \
+            "${args[@]}" \
+            --prefix "$PWD/../.out/external"
+
+      # Temporary until the zlint fork no longer bundles the rules.
+      - name: Build bundled rules for parity
+        run: |
+          set -euo pipefail
+          cd .zlint
+          zig build \
+            -Doptimize=ReleaseSafe \
+            -Dcpu=baseline \
+            -Dversion=parity \
+            --prefix "$PWD/../.out/bundled"
+
+      - name: Strict fixture parity
+        run: |
+          set -euo pipefail
+          fixture="$PWD/zig/zlint_rules/testdata/parity"
+          run() {
+            local bin="$1" out="$2" status
+            set +e
+            (cd "$fixture" && "$bin" -c zlint.json --format json . >"$out" 2>/dev/null)
+            status=$?
+            set -e
+            sort "$out" -o "$out"
+            printf '%s\n' "$status" >"$out.status"
+          }
+          run "$PWD/.out/bundled/bin/zlint" "$PWD/.out/bundled.json"
+          run "$PWD/.out/external/bin/zlint" "$PWD/.out/external.json"
+          diff -u "$PWD/.out/bundled.json" "$PWD/.out/external.json"
+          diff -u "$PWD/.out/bundled.json.status" "$PWD/.out/external.json.status"
+          test "$(wc -l <"$PWD/.out/external.json")" -eq 12
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp .out/external/bin/zlint dist/zlint-linux-x86_64
+          tar -C dist -czf dist/zlint-linux-x86_64.tar.gz zlint-linux-x86_64
+          (cd dist && sha256sum zlint-linux-x86_64.tar.gz > zlint-linux-x86_64.tar.gz.sha256)
+          cat dist/zlint-linux-x86_64.tar.gz.sha256
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/zlint-linux-x86_64.tar.gz
+            dist/zlint-linux-x86_64.tar.gz.sha256

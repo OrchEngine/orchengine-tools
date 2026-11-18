@@ -3,7 +3,13 @@
 /go-callvis
 /go/bin/
 /go/out/
+/zig/bin/
+/zig/out/
+/zig/.zig-cache/
+/zig/zig-out/
 /go/go-callvis/
 **/node_modules/
 *.log
 .DS_Store
+/zig/zlint/
+/zig/.tmp/

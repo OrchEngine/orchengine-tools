@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Ensure the pinned zlint source checkout exists and print its path.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+sha="$(tr -d '[:space:]' <"$src/zlint.lock")"
+dir="${ZLINT_SRC_DIR:-$src/zlint}"
+
+if [ -e "$dir" ] && [ ! -d "$dir/.git" ]; then
+    echo "zlint-src: $dir exists but is not a git checkout" >&2
+    echo "remove it or set ZLINT_SRC_DIR" >&2
+    exit 1
+fi
+
+if [ ! -d "$dir/.git" ]; then
+    mkdir -p "$(dirname "$dir")"
+    git clone --filter=blob:none https://github.com/OrchEngine/zlint.git "$dir"
+fi
+
+git -C "$dir" fetch --quiet origin
+if ! git -C "$dir" checkout --quiet --detach "$sha"; then
+    echo "zlint-src: cannot check out $sha in $dir" >&2
+    echo "remove it or set ZLINT_SRC_DIR" >&2
+    exit 1
+fi
+
+printf '%s\n' "$dir"
