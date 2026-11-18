@@ -1,0 +1,13 @@
+{
+  "rules": {
+    "max-function-lines": ["error", { "max_lines": 3, "allow_tests": false }],
+    "max-complexity": ["error", { "max_complexity": 1, "allow_tests": false }],
+    "max-params": ["error", { "max_params": 1, "allow_tests": false }],
+    "max-nesting": ["error", { "max_depth": 1, "allow_tests": false }],
+    "production-file-size": ["error", { "max_lines": 5 }],
+    "max-file-imports": ["error", { "max_imports": 0 }],
+    "forbid-casts": ["error", { "allow_tests": false }],
+    "mutual-type-cycles": "error",
+    "uncalled-private-function": "error"
+  }
+}

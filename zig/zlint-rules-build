@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Build a zlint binary with the external OrchEngine custom rules.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+zlint_dir="${ZLINT_DIR:-$src/zlint}"
+out="${TOOLS_BIN:-$src/bin}/zlint-orche"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+if [ ! -f "$zlint_dir/build.zig" ]; then
+    echo "zlint-rules-build: not a zlint checkout: $zlint_dir" >&2
+    echo "set ZLINT_DIR to an OrchEngine/zlint checkout" >&2
+    exit 1
+fi
+
+args=()
+for rule in "$src"/zlint_rules/*.zig; do
+    args+=("-Dcustom_rules=$rule")
+done
+
+cd "$zlint_dir"
+zig build -Doptimize=ReleaseSafe -Dversion=0.10.0-orche "${args[@]}" --prefix "$tmp"
+mkdir -p "$(dirname "$out")"
+cp "$tmp/bin/zlint" "$out"
+echo "$out"
