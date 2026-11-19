@@ -152,7 +152,10 @@ fn cmdCheck(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, target: []con
     const zlint_bin = try selectZlint(io, arena, zig_dir, release);
     const tmp_root = try std.fs.path.join(arena, &.{ zig_dir, ".tmp" });
     try std.Io.Dir.cwd().createDirPath(io, tmp_root);
-    const unique = try std.fmt.allocPrint(arena, "check-{x}", .{std.crypto.random.int(u64)});
+    var random_bytes: [8]u8 = undefined;
+    std.Io.random(io, &random_bytes);
+    const random_id = std.mem.readInt(u64, &random_bytes, .little);
+    const unique = try std.fmt.allocPrint(arena, "check-{x}", .{random_id});
     const tmp_dir = try std.fs.path.join(arena, &.{ tmp_root, unique });
     try std.Io.Dir.cwd().createDirPath(io, tmp_dir);
 
