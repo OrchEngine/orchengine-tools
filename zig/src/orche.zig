@@ -47,6 +47,10 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const command = args[1];
+    if (std.mem.eql(u8, command, "-h") or std.mem.eql(u8, command, "--help")) {
+        std.debug.print("{s}", .{usage});
+        return;
+    }
     var target: []const u8 = ".";
     var release = false;
     var tools_arg: ?[]const u8 = null;
