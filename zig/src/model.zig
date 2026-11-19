@@ -24,8 +24,22 @@ pub const Finding = struct {
     end_line: u32 = 0,
     source: FindingSource,
     weight: u32 = 0,
+    key: ?[]const u8 = null,
     suppressed: bool = false,
     suppression_reason: ?[]const u8 = null,
+};
+
+pub const Suppression = struct {
+    rule_id: []const u8,
+    key: []const u8,
+    reason: []const u8,
+};
+
+pub const project_rule_ids = [_][]const u8{
+    "import-cycle",
+    "call-cycle",
+    "uncalled-private-function",
+    "architecture",
 };
 
 pub const Settings = struct {
@@ -100,6 +114,8 @@ pub const Config = struct {
     default_error_weight: u32 = 10,
     default_warning_weight: u32 = 1,
     default_note_weight: u32 = 0,
+    project_rule_severities: std.StringHashMapUnmanaged(Severity) = .empty,
+    suppressions: std.ArrayList(Suppression) = .empty,
 };
 
 pub const SkippedFile = struct {
@@ -282,6 +298,36 @@ pub const Model = struct {
         };
     }
 
+    pub fn projectSeverity(self: *const Model, rule_id: []const u8) Severity {
+        return self.config.project_rule_severities.get(rule_id) orelse .warning;
+    }
+
+    pub fn validateProjectConfig(self: *const Model) !void {
+        var severities = self.config.project_rule_severities.iterator();
+        while (severities.next()) |entry| {
+            if (!isProjectRule(entry.key_ptr.*)) return error.UnknownProjectRule;
+        }
+        for (self.config.suppressions.items) |suppression| {
+            if (!isProjectRule(suppression.rule_id)) return error.UnknownProjectRule;
+            if (suppression.key.len == 0) return error.MissingSuppressionKey;
+            if (suppression.reason.len == 0) return error.MissingSuppressionReason;
+        }
+    }
+
+    pub fn applySuppressions(self: *Model) void {
+        for (self.findings.items) |*finding| {
+            if (finding.source != .project) continue;
+            const key = finding.key orelse continue;
+            for (self.config.suppressions.items) |suppression| {
+                if (!std.mem.eql(u8, suppression.rule_id, finding.rule_id)) continue;
+                if (!std.mem.eql(u8, suppression.key, key)) continue;
+                finding.suppressed = true;
+                finding.suppression_reason = suppression.reason;
+                break;
+            }
+        }
+    }
+
     pub fn fnLabel(self: *const Model, fn_idx: u32) []const u8 {
         const f = self.fns.items[fn_idx];
         return std.fmt.allocPrint(self.gpa, "{s}:{d} {s}", .{
@@ -311,6 +357,13 @@ pub const Model = struct {
             std.mem.eql(u8, raw, "root");
     }
 };
+
+pub fn isProjectRule(rule_id: []const u8) bool {
+    inline for (project_rule_ids) |id| {
+        if (std.mem.eql(u8, rule_id, id)) return true;
+    }
+    return false;
+}
 
 pub fn countOccurrences(haystack: []const u8, needle: []const u8) u32 {
     var n: u32 = 0;
@@ -396,4 +449,36 @@ test "lineOf and countOccurrences" {
     try std.testing.expectEqual(@as(u32, 3), Model.lineOf(src, 4));
     try std.testing.expectEqual(@as(u32, 2), countOccurrences("TODO x TODO", "TODO"));
     try std.testing.expectEqual(@as(u32, 0), countOccurrences("nothing", "TODO"));
+}
+
+test "apply project suppressions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    try m.findings.append(alloc, .{
+        .rule_id = "import-cycle",
+        .severity = .@"error",
+        .message = "cycle",
+        .path = "a.zig",
+        .source = .project,
+        .key = "a.zig,b.zig",
+        .weight = 10,
+    });
+    try m.config.suppressions.append(alloc, .{
+        .rule_id = "import-cycle",
+        .key = "a.zig,b.zig",
+        .reason = "legacy",
+    });
+
+    m.applySuppressions();
+
+    try std.testing.expect(m.findings.items[0].suppressed);
+    try std.testing.expectEqualStrings("legacy", m.findings.items[0].suppression_reason.?);
 }

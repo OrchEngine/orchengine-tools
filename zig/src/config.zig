@@ -5,16 +5,20 @@ const model = @import("model.zig");
 const Model = model.Model;
 
 pub fn load(model_ptr: *Model, io: Io, path: []const u8) !void {
-    const gpa = model_ptr.gpa;
     const source = try Io.Dir.cwd().readFileAllocOptions(
         io,
         path,
-        gpa,
+        model_ptr.gpa,
         .limited(1024 * 1024),
         .of(u8),
         0,
     );
+    try parse(model_ptr, source);
+    try model_ptr.validateProjectConfig();
+}
 
+pub fn parse(model_ptr: *Model, source: []const u8) !void {
+    const gpa = model_ptr.gpa;
     const root = try std.json.parseFromSliceLeaky(std.json.Value, gpa, source, .{});
     const obj = switch (root) {
         .object => |o| o,
@@ -98,6 +102,57 @@ pub fn load(model_ptr: *Model, io: Io, path: []const u8) !void {
             else => {},
         }
     }
+
+    if (obj.get("project_rules")) |rules_value| {
+        switch (rules_value) {
+            .object => |rules| {
+                var it = rules.iterator();
+                while (it.next()) |entry| {
+                    const severity = severityOf(entry.value_ptr.*) orelse return error.InvalidSeverity;
+                    try model_ptr.config.project_rule_severities.put(gpa, entry.key_ptr.*, severity);
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (obj.get("suppressions")) |suppressions_value| {
+        switch (suppressions_value) {
+            .array => |items| {
+                for (items.items) |item| {
+                    const entry = switch (item) {
+                        .object => |o| o,
+                        else => continue,
+                    };
+                    try model_ptr.config.suppressions.append(gpa, .{
+                        .rule_id = stringOf(entry.get("rule")) orelse "",
+                        .key = stringOf(entry.get("key")) orelse "",
+                        .reason = stringOf(entry.get("reason")) orelse "",
+                    });
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn stringOf(value: ?std.json.Value) ?[]const u8 {
+    const v = value orelse return null;
+    return switch (v) {
+        .string => |s| s,
+        else => null,
+    };
+}
+
+fn severityOf(value: std.json.Value) ?model.Severity {
+    const s = switch (value) {
+        .string => |text| text,
+        else => return null,
+    };
+    if (std.mem.eql(u8, s, "error")) return .@"error";
+    if (std.mem.eql(u8, s, "warning") or std.mem.eql(u8, s, "warn")) return .warning;
+    if (std.mem.eql(u8, s, "note") or std.mem.eql(u8, s, "info")) return .note;
+    return null;
 }
 
 fn appendStrings(gpa: model.Gpa, list: *std.ArrayList([]const u8), value: std.json.Value) !void {
@@ -122,4 +177,64 @@ fn asU32(value: ?std.json.Value) ?u32 {
         .float => |f| if (f >= 0 and f <= @as(f64, @floatFromInt(std.math.maxInt(u32)))) @intFromFloat(f) else null,
         else => null,
     };
+}
+
+fn testModel(alloc: std.mem.Allocator) Model {
+    return .{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+}
+
+test "parse project rules and suppressions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var m = testModel(arena.allocator());
+
+    try parse(&m,
+        \\{"project_rules":{"import-cycle":"error","call-cycle":"warning"},"suppressions":[{"rule":"import-cycle","key":"a.zig,b.zig","reason":"legacy"}]}
+    );
+    try m.validateProjectConfig();
+
+    try std.testing.expectEqual(model.Severity.@"error", m.projectSeverity("import-cycle"));
+    try std.testing.expectEqual(model.Severity.warning, m.projectSeverity("call-cycle"));
+    try std.testing.expectEqual(@as(usize, 1), m.config.suppressions.items.len);
+    try std.testing.expectEqualStrings("a.zig,b.zig", m.config.suppressions.items[0].key);
+}
+
+test "reject unknown project rule" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var m = testModel(arena.allocator());
+
+    try parse(&m, "{\"project_rules\":{\"not-a-rule\":\"error\"}}");
+    try std.testing.expectError(error.UnknownProjectRule, m.validateProjectConfig());
+}
+
+test "reject suppression without reason" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var m = testModel(arena.allocator());
+
+    try parse(&m, "{\"suppressions\":[{\"rule\":\"import-cycle\",\"key\":\"a.zig\"}]}");
+    try std.testing.expectError(error.MissingSuppressionReason, m.validateProjectConfig());
+}
+
+test "reject suppression without key" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var m = testModel(arena.allocator());
+
+    try parse(&m, "{\"suppressions\":[{\"rule\":\"import-cycle\",\"reason\":\"legacy\"}]}");
+    try std.testing.expectError(error.MissingSuppressionKey, m.validateProjectConfig());
+}
+
+test "reject invalid project severity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var m = testModel(arena.allocator());
+
+    try std.testing.expectError(error.InvalidSeverity, parse(&m, "{\"project_rules\":{\"import-cycle\":\"loud\"}}"));
 }

@@ -210,7 +210,11 @@ pub fn main(init: std.process.Init) !void {
         if (Io.Dir.cwd().statFile(io, auto_path, .{})) |stat| {
             if (stat.kind == .file) {
                 config.load(&m, io, auto_path) catch |err| {
-                    std.debug.print("zigdepends: ignoring {s}: {s}\n", .{ auto_path, @errorName(err) });
+                    std.debug.print("zigdepends: cannot load config {s}: {s}\n", .{
+                        auto_path,
+                        @errorName(err),
+                    });
+                    std.process.exit(2);
                 };
             }
         } else |_| {}
@@ -242,6 +246,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try analyze.run(&m);
+    m.applySuppressions();
 
     if (check_mode) {
         const failed = check.print(&m, io, check_format) catch |err| {

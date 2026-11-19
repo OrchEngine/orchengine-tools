@@ -179,13 +179,44 @@ Flags:
   },
   "weights": {
     "max-file-imports": 5
-  }
+  },
+  "project_rules": {
+    "import-cycle": "warning",
+    "call-cycle": "warning",
+    "uncalled-private-function": "warning",
+    "architecture": "note"
+  },
+  "suppressions": [
+    {
+      "rule": "import-cycle",
+      "key": "src/a.zig,src/b.zig",
+      "reason": "legacy cycle, scheduled for removal"
+    }
+  ]
 }
 ```
 
 Findings are weighted by rule ID when `weights` has an entry, otherwise by
-severity defaults. Project configuration supplies OrchEngine-specific weights
-and allowlists.
+severity defaults. Project configuration supplies OrchEngine-specific weights,
+severities, and suppressions.
+
+### Project rules and suppressions
+
+Stable project rule IDs:
+
+- `import-cycle`
+- `call-cycle`
+- `uncalled-private-function`
+- `architecture`
+
+`project_rules` sets each rule's severity (`error`, `warning`, `note`).
+Unknown IDs are rejected.
+
+`suppressions` entries require `rule`, `key`, and `reason`. The key is the
+stable identity of the finding: sorted cycle members for cycles, or the
+function name for uncalled functions. Unknown rules, missing keys, and missing
+reasons fail config loading before analysis. Suppressed findings stay visible
+in the report with their reason and do not affect `--check` or debt.
 
 Precedence: defaults < `zigdepends.json` < CLI flags. Generated detection is
 header-first (`Code generated ... DO NOT EDIT`, `@generated`) and does not
