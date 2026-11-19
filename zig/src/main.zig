@@ -246,7 +246,6 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try analyze.run(&m);
-    m.applySuppressions();
 
     if (check_mode) {
         const failed = check.print(&m, io, check_format) catch |err| {

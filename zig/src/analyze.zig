@@ -9,6 +9,8 @@ pub fn run(model_ptr: *Model) !void {
     try buildIndices(model_ptr);
     if (model_ptr.config.track_capabilities) computeCapabilities(model_ptr);
     try findCycles(model_ptr);
+    try addImportCycleFindings(model_ptr);
+    model_ptr.applySuppressions();
     computeDebt(model_ptr);
     try computeChains(model_ptr);
 }
@@ -389,6 +391,80 @@ fn findCycles(model_ptr: *Model) !void {
 }
 
 // ---------------------------------------------------------------------------
+// Project findings
+
+fn addImportCycleFindings(model_ptr: *Model) !void {
+    const gpa = model_ptr.gpa;
+    const severity = model_ptr.projectSeverity("import-cycle");
+    for (model_ptr.import_cycles.items) |cycle| {
+        if (cycle.nodes.len == 0 or cycleHasGenerated(model_ptr, cycle)) continue;
+        try model_ptr.findings.append(gpa, .{
+            .rule_id = "import-cycle",
+            .severity = severity,
+            .message = try cycleMessage(model_ptr, cycle),
+            .path = model_ptr.fileLabel(cycle.nodes[0]),
+            .line = cycleEdgeLine(model_ptr, cycle),
+            .source = .project,
+            .weight = model_ptr.findingWeight("import-cycle", severity),
+            .key = try cycleKey(model_ptr, cycle),
+        });
+    }
+}
+
+fn cycleHasGenerated(model_ptr: *Model, cycle: model.Cycle) bool {
+    for (cycle.nodes) |file_idx| {
+        if (model_ptr.files.items[file_idx].generated) return true;
+    }
+    return false;
+}
+
+fn cycleKey(model_ptr: *Model, cycle: model.Cycle) ![]const u8 {
+    const gpa = model_ptr.gpa;
+    const labels = try gpa.alloc([]const u8, cycle.nodes.len);
+    for (cycle.nodes, 0..) |file_idx, i| labels[i] = model_ptr.fileLabel(file_idx);
+    std.mem.sort([]const u8, labels, {}, struct {
+        fn less(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.less);
+
+    var out: std.ArrayList(u8) = .empty;
+    for (labels, 0..) |label, i| {
+        if (i != 0) try out.append(gpa, ',');
+        try out.appendSlice(gpa, label);
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+fn cycleMessage(model_ptr: *Model, cycle: model.Cycle) ![]const u8 {
+    var aw = std.Io.Writer.Allocating.init(model_ptr.gpa);
+    defer aw.deinit();
+    const w = &aw.writer;
+
+    try w.writeAll("import cycle: ");
+    for (cycle.nodes, 0..) |file_idx, i| {
+        if (i != 0) try w.writeAll(" -> ");
+        try w.writeAll(model_ptr.fileLabel(file_idx));
+    }
+    if (cycle.nodes.len > 0) {
+        try w.writeAll(" -> ");
+        try w.writeAll(model_ptr.fileLabel(cycle.nodes[0]));
+    }
+    return model_ptr.gpa.dupe(u8, aw.written());
+}
+
+fn cycleEdgeLine(model_ptr: *Model, cycle: model.Cycle) u32 {
+    if (cycle.nodes.len == 0) return 0;
+    for (cycle.nodes, 0..) |from, i| {
+        const to = cycle.nodes[(i + 1) % cycle.nodes.len];
+        for (model_ptr.files.items[from].imports.items) |imp| {
+            if (imp.resolved == to) return imp.line;
+        }
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // Debt
 
 fn computeDebt(model_ptr: *Model) void {
@@ -646,4 +722,42 @@ test "findings outside functions are structural" {
     try std.testing.expectEqual(@as(u32, 3), m.total_debt);
     try std.testing.expectEqual(@as(u32, 0), m.fn_debt);
     try std.testing.expectEqual(@as(u32, 3), m.structural_debt);
+}
+
+test "import cycle finding and suppression" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    const a = try m.addFile("a.zig", "");
+    const b = try m.addFile("b.zig", "");
+    try m.files.items[a].imports.append(alloc, .{ .raw = "b.zig", .line = 3, .resolved = b });
+    try m.files.items[b].imports.append(alloc, .{ .raw = "a.zig", .line = 4, .resolved = a });
+
+    try findCycles(&m);
+    try addImportCycleFindings(&m);
+
+    try std.testing.expectEqual(@as(usize, 1), m.findings.items.len);
+    const finding = m.findings.items[0];
+    try std.testing.expectEqualStrings("import-cycle", finding.rule_id);
+    try std.testing.expectEqual(model.Severity.warning, finding.severity);
+    try std.testing.expectEqualStrings("a.zig,b.zig", finding.key.?);
+    try std.testing.expect(finding.line > 0);
+
+    try m.config.suppressions.append(alloc, .{
+        .rule_id = "import-cycle",
+        .key = "a.zig,b.zig",
+        .reason = "legacy",
+    });
+    m.applySuppressions();
+    computeDebt(&m);
+
+    try std.testing.expect(m.findings.items[0].suppressed);
+    try std.testing.expectEqual(@as(u32, 0), m.total_debt);
 }

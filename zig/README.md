@@ -209,7 +209,8 @@ Stable project rule IDs:
 - `uncalled-private-function`
 - `architecture`
 
-`project_rules` sets each rule's severity (`error`, `warning`, `note`).
+`import-cycle` is implemented. The other IDs are schema-ready for their rule
+tickets. `project_rules` sets each rule's severity (`error`, `warning`, `note`).
 Unknown IDs are rejected.
 
 `suppressions` entries require `rule`, `key`, and `reason`. The key is the
@@ -278,8 +279,9 @@ warning, and 0 per note; `weights` overrides individual rule IDs.
 Function LOC, cyclomatic proxy, nesting, and parameter counts remain visible as
 display-only metrics. They do not create findings or debt.
 
-Import and call cycles are shown in the report. Gating them as project rules is
-tracked separately. Self-recursion is normally intentional.
+Import cycles are emitted as `import-cycle` project findings. Call cycles and
+uncalled functions remain report-only until their rule tickets land.
+Self-recursion is normally intentional.
 
 The total is converted to hours and dev-days at 6 productive hours per day.
 These are configurable estimates, not measurements.

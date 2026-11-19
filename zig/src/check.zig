@@ -63,6 +63,10 @@ fn writeJson(model_ptr: *Model, w: *std.Io.Writer) !void {
         try s.write(finding.message);
         try s.objectField("path");
         try s.write(finding.path);
+        if (finding.key) |key| {
+            try s.objectField("key");
+            try s.write(key);
+        }
         try s.objectField("line");
         try s.write(finding.line);
         try s.objectField("end_line");
