@@ -16,7 +16,7 @@ trap 'rm -rf "$tmp"' EXIT
 list_generated() {
     local dir="$1"
     (cd "$dir" && find . -maxdepth 1 -type f \
-        \( -name '*_workflow_gen.zig' -o -name 'run.zig' -o -name 'registry.zig' \) \
+        \( -name '*_workflow_gen.zig' -o -name 'run.zig' -o -name 'registry.zon' \) \
         -exec basename {} \; | sort)
 }
 expected="$(list_generated "$tmp")"
@@ -34,8 +34,8 @@ for file in $expected; do
     fi
 done
 
-if [ -n "$(git status --porcelain -- customworkflows/*_workflow_gen.zig customworkflows/run.zig customworkflows/registry.zig src/proto_gen)" ]; then
-    git status --short -- customworkflows/*_workflow_gen.zig customworkflows/run.zig customworkflows/registry.zig src/proto_gen
+if [ -n "$(git status --porcelain -- customworkflows/*_workflow_gen.zig customworkflows/run.zig customworkflows/registry.zon src/proto_gen)" ]; then
+    git status --short -- customworkflows/*_workflow_gen.zig customworkflows/run.zig customworkflows/registry.zon src/proto_gen
     echo "generated files are stale; commit the regenerated output" >&2
     exit 1
 fi
