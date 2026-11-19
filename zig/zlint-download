@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Download and verify the pinned prebuilt zlint binary for CI.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+env_file="$src/zlint-release.env"
+# shellcheck source=/dev/null
+. "$env_file"
+
+if [ "$ZLINT_RELEASE_TAG" = "PENDING" ] || [ "$ZLINT_RELEASE_SHA256" = "PENDING" ]; then
+    echo "zlint-download: prebuilt zlint is not pinned yet" >&2
+    echo "publish a zlint-v* release, then set TAG and SHA256 in zig/zlint-release.env" >&2
+    exit 1
+fi
+
+dest="$src/.tmp/zlint"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+if [ -n "${ZLINT_RELEASE_FILE:-}" ]; then
+    cp "$ZLINT_RELEASE_FILE" "$tmp/$ZLINT_RELEASE_ASSET"
+elif [ -n "${GH_TOKEN:-}" ]; then
+    export GH_TOKEN
+    gh release download "$ZLINT_RELEASE_TAG" \
+        --repo "$ZLINT_RELEASE_REPO" \
+        --pattern "$ZLINT_RELEASE_ASSET" \
+        --dir "$tmp"
+else
+    curl --fail --location --retry 3 \
+        --output "$tmp/$ZLINT_RELEASE_ASSET" \
+        "https://github.com/$ZLINT_RELEASE_REPO/releases/download/$ZLINT_RELEASE_TAG/$ZLINT_RELEASE_ASSET"
+fi
+
+actual="$(sha256sum "$tmp/$ZLINT_RELEASE_ASSET" | cut -d' ' -f1)"
+if [ "$actual" != "$ZLINT_RELEASE_SHA256" ]; then
+    echo "zlint-download: checksum mismatch" >&2
+    echo "expected $ZLINT_RELEASE_SHA256" >&2
+    echo "actual   $actual" >&2
+    exit 1
+fi
+
+tar -xzf "$tmp/$ZLINT_RELEASE_ASSET" -C "$tmp"
+mkdir -p "$dest"
+install -m 0755 "$tmp/${ZLINT_RELEASE_ASSET%.tar.gz}" "$dest/zlint"
+echo "$dest/zlint"

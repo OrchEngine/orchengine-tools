@@ -3,7 +3,11 @@
 set -euo pipefail
 
 src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-zlint_dir="${ZLINT_DIR:-$src/zlint}"
+if [ -n "${ZLINT_DIR:-}" ]; then
+    zlint_dir="$ZLINT_DIR"
+else
+    zlint_dir="$("$src/zlint-src")"
+fi
 out="${TOOLS_BIN:-$src/bin}/zlint-orche"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
