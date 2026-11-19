@@ -150,8 +150,19 @@ fn cmdLint(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, target: []cons
 
 fn cmdCheck(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, target: []const u8, release: bool) !void {
     const zlint_bin = try selectZlint(io, arena, zig_dir, release);
-    const tmp_dir = try std.fs.path.join(arena, &.{ zig_dir, ".tmp" });
+    const tmp_root = try std.fs.path.join(arena, &.{ zig_dir, ".tmp" });
+    try std.Io.Dir.cwd().createDirPath(io, tmp_root);
+    const unique = try std.fmt.allocPrint(arena, "check-{x}", .{std.crypto.random.int(u64)});
+    const tmp_dir = try std.fs.path.join(arena, &.{ tmp_root, unique });
     try std.Io.Dir.cwd().createDirPath(io, tmp_dir);
+
+    var keep = false;
+    defer if (!keep) std.Io.Dir.cwd().deleteTree(io, tmp_dir) catch {};
+    errdefer {
+        keep = true;
+        std.debug.print("orche: check artifacts kept at {s}\n", .{tmp_dir});
+    }
+
     const report = try std.fs.path.join(arena, &.{ tmp_dir, "zlint-report.jsonl" });
 
     try run(io, &.{
@@ -169,7 +180,7 @@ fn cmdCheck(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, target: []con
 }
 
 fn cmdVerify(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, target: []const u8, release: bool) !void {
-    try cmdLint(io, arena, zig_dir, target, release);
+    try cmdCheck(io, arena, zig_dir, target, release);
     try run(io, &.{ "zig", "build", "gen-proto" }, target);
     try run(io, &.{ "zig", "build" }, target);
     try run(io, &.{ "zig", "build", "test" }, target);
