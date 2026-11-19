@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  zig:
+    name: Zig
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - run: cd zig && zig fmt --check build.zig src/*.zig zlint_rules/*.zig
+      - run: cd zig && zig build -Doptimize=ReleaseSafe
+      - run: cd zig && zig build test
+      - run: cd zig && ./zig-out/bin/orche --help
+      - name: ShellCheck
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update; sudo apt-get install -y shellcheck; }
+          shellcheck zig/tasks/*.sh zig/zlint-download zig/zlint-src zig/zlint-release zig/zlint-rules-build zig/zlint-rules-parity
