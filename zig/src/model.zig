@@ -4,26 +4,31 @@ const Ast = std.zig.Ast;
 pub const Gpa = std.mem.Allocator;
 pub const no_fn = std.math.maxInt(u32);
 
+pub const Severity = enum {
+    @"error",
+    warning,
+    note,
+};
+
+pub const FindingSource = enum {
+    zlint,
+    project,
+};
+
+pub const Finding = struct {
+    rule_id: []const u8,
+    severity: Severity,
+    message: []const u8,
+    path: []const u8,
+    line: u32 = 0,
+    end_line: u32 = 0,
+    source: FindingSource,
+    weight: u32 = 0,
+    suppressed: bool = false,
+    suppression_reason: ?[]const u8 = null,
+};
+
 pub const Settings = struct {
-    loc_threshold: u32 = 60,
-    loc_weight: u32 = 2,
-    cx_threshold: u32 = 15,
-    cx_weight: u32 = 15,
-    nest_threshold: u32 = 4,
-    nest_weight: u32 = 10,
-    param_threshold: u32 = 5,
-    param_weight: u32 = 10,
-    doc_weight: u32 = 10,
-    todo_weight: u32 = 10,
-    debug_output_weight: u32 = 10,
-    swallow_weight: u32 = 20,
-    unreachable_weight: u32 = 10,
-    import_cycle_weight: u32 = 120,
-    call_cycle_weight: u32 = 60,
-    align_cast_weight: u32 = 20,
-    from_int_weight: u32 = 20,
-    const_cast_weight: u32 = 10,
-    ptr_cast_weight: u32 = 5,
     max_call_nodes: usize = 80,
     min_debt: u32 = 0,
 };
@@ -91,6 +96,10 @@ pub const Config = struct {
     debug_io: bool = false,
     track_capabilities: bool = true,
     track_fields: bool = true,
+    rule_weights: std.StringHashMapUnmanaged(u32) = .empty,
+    default_error_weight: u32 = 10,
+    default_warning_weight: u32 = 1,
+    default_note_weight: u32 = 0,
 };
 
 pub const SkippedFile = struct {
@@ -218,6 +227,9 @@ pub const Model = struct {
     ambiguous_names: u32 = 0,
     resolved_calls: u32 = 0,
     mutual_call_cycles: u32 = 0,
+    findings: std.ArrayList(Finding) = .empty,
+    zlint_debt: u32 = 0,
+    project_debt: u32 = 0,
     fn_debt: u32 = 0,
     file_debt: u32 = 0,
     structural_debt: u32 = 0,
@@ -253,6 +265,21 @@ pub const Model = struct {
             }
         }
         return path;
+    }
+
+    pub fn fileIndexByPath(self: *const Model, path: []const u8) ?u32 {
+        if (self.file_by_path.get(path)) |file_idx| return file_idx;
+        const resolved = std.fs.path.resolve(self.gpa, &.{ self.root, path }) catch return null;
+        return self.file_by_path.get(resolved);
+    }
+
+    pub fn findingWeight(self: *const Model, rule_id: []const u8, severity: Severity) u32 {
+        if (self.config.rule_weights.get(rule_id)) |weight| return weight;
+        return switch (severity) {
+            .@"error" => self.config.default_error_weight,
+            .warning => self.config.default_warning_weight,
+            .note => self.config.default_note_weight,
+        };
     }
 
     pub fn fnLabel(self: *const Model, fn_idx: u32) []const u8 {

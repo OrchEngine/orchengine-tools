@@ -392,53 +392,46 @@ fn findCycles(model_ptr: *Model) !void {
 // Debt
 
 fn computeDebt(model_ptr: *Model) void {
-    const s = model_ptr.settings;
     var fn_total: u32 = 0;
     var file_total: u32 = 0;
+    var total: u32 = 0;
+    var zlint_total: u32 = 0;
+    var project_total: u32 = 0;
 
-    for (model_ptr.fns.items) |*f| {
-        var d: u32 = 0;
-        if (f.loc > s.loc_threshold) d += (f.loc - s.loc_threshold) * s.loc_weight;
-        if (f.complexity > s.cx_threshold) d += (f.complexity - s.cx_threshold) * s.cx_weight;
-        if (f.nesting > s.nest_threshold) d += (f.nesting - s.nest_threshold) * s.nest_weight;
-        if (f.params > s.param_threshold) d += (f.params - s.param_threshold) * s.param_weight;
-        if (f.is_pub and !f.has_doc) d += s.doc_weight;
-        f.debt_min = d;
-        fn_total += d;
+    for (model_ptr.fns.items) |*f| f.debt_min = 0;
+    for (model_ptr.files.items) |*file| file.debt_min = 0;
+
+    for (model_ptr.findings.items) |finding| {
+        if (finding.suppressed) continue;
+        total += finding.weight;
+        switch (finding.source) {
+            .zlint => zlint_total += finding.weight,
+            .project => project_total += finding.weight,
+        }
+
+        const file_idx = model_ptr.fileIndexByPath(finding.path) orelse continue;
+        model_ptr.files.items[file_idx].debt_min += finding.weight;
+        file_total += finding.weight;
+
+        if (finding.line == 0) continue;
+        for (model_ptr.files.items[file_idx].fns.items) |fn_idx| {
+            const f = &model_ptr.fns.items[fn_idx];
+            if (finding.line >= f.line and finding.line <= f.end_line) {
+                f.debt_min += finding.weight;
+                fn_total += finding.weight;
+                break;
+            }
+        }
     }
-
-    var structural: u32 = 0;
-    var debug_total: u32 = 0;
-    for (model_ptr.files.items) |*file| {
-        var d: u32 = 0;
-        d += file.todo_count * s.todo_weight;
-        d += file.debug_output_count * s.debug_output_weight;
-        debug_total += file.debug_output_count * s.debug_output_weight;
-        d += file.unreachable_count * s.unreachable_weight;
-        d += file.swallow_count * s.swallow_weight;
-        d += file.ptr_cast_count * s.ptr_cast_weight;
-        d += file.align_cast_count * s.align_cast_weight;
-        d += file.const_cast_count * s.const_cast_weight;
-        d += file.from_int_count * s.from_int_weight;
-        for (file.fns.items) |fn_idx| d += model_ptr.fns.items[fn_idx].debt_min;
-        file.debt_min = d;
-        file_total += d;
-        structural += d - (blk: {
-            var fnd: u32 = 0;
-            for (file.fns.items) |fn_idx| fnd += model_ptr.fns.items[fn_idx].debt_min;
-            break :blk fnd;
-        });
-    }
-
-    const cycle_debt = @as(u32, @intCast(model_ptr.import_cycles.items.len)) * s.import_cycle_weight +
-        model_ptr.mutual_call_cycles * s.call_cycle_weight;
 
     model_ptr.fn_debt = fn_total;
     model_ptr.file_debt = file_total;
-    model_ptr.structural_debt = structural;
-    model_ptr.debug_debt = debug_total;
-    model_ptr.cycle_debt = cycle_debt;
-    model_ptr.total_debt = fn_total + structural + cycle_debt;
+    model_ptr.structural_debt = total - fn_total;
+    model_ptr.debug_debt = 0;
+    model_ptr.cycle_debt = 0;
+    model_ptr.zlint_debt = zlint_total;
+    model_ptr.project_debt = project_total;
+    model_ptr.total_debt = total;
 }
 
 // ---------------------------------------------------------------------------
@@ -569,56 +562,88 @@ test "capabilities propagate to callers" {
     try std.testing.expect(!m.fns.items[1].needs_io);
 }
 
-test "debug output adds debt" {
-    const alloc = std.testing.allocator;
+fn testModel(alloc: std.mem.Allocator) !Model {
     var m = Model{
         .gpa = alloc,
         .root = ".",
         .title = "test",
         .settings = .{},
     };
-    try m.files.append(alloc, .{
-        .path = "a.zig",
-        .dir = ".",
-        .source = "",
-        .debug_output_count = 2,
-    });
-    computeDebt(&m);
-    try std.testing.expectEqual(@as(u32, 20), m.debug_debt);
-    try std.testing.expectEqual(@as(u32, 20), m.total_debt);
-}
-
-test "debt thresholds and weights" {
-    const alloc = std.testing.allocator;
-    var m = Model{
-        .gpa = alloc,
-        .root = ".",
-        .title = "test",
-        .settings = .{},
-    };
-    try m.files.append(alloc, .{
-        .path = "a.zig",
-        .dir = ".",
-        .source = "",
-    });
+    _ = try m.addFile("a.zig", "");
     try m.fns.append(alloc, .{
         .name = "f",
         .file = 0,
-        .line = 1,
-        .end_line = 61,
+        .line = 10,
+        .end_line = 20,
         .start = 0,
         .end = 1,
-        .params = 6,
-        .complexity = 16,
-        .nesting = 5,
-        .loc = 61,
-        .is_pub = true,
-        .has_doc = false,
+        .params = 1,
+        .complexity = 1,
+        .nesting = 0,
+        .loc = 10,
+        .is_pub = false,
+        .has_doc = true,
     });
     try m.files.items[0].fns.append(alloc, 0);
+    return m;
+}
+
+test "findings drive debt" {
+    const alloc = std.testing.allocator;
+    var m = try testModel(alloc);
+    try m.findings.append(alloc, .{
+        .rule_id = "test-rule",
+        .severity = .@"error",
+        .message = "bad",
+        .path = "a.zig",
+        .line = 12,
+        .source = .zlint,
+        .weight = 10,
+    });
     computeDebt(&m);
 
-    // 2 (LOC) + 15 (complexity) + 10 (nesting) + 10 (params) + 10 (doc)
-    try std.testing.expectEqual(@as(u32, 47), m.fns.items[0].debt_min);
-    try std.testing.expectEqual(@as(u32, 47), m.total_debt);
+    try std.testing.expectEqual(@as(u32, 10), m.total_debt);
+    try std.testing.expectEqual(@as(u32, 10), m.zlint_debt);
+    try std.testing.expectEqual(@as(u32, 10), m.fn_debt);
+    try std.testing.expectEqual(@as(u32, 10), m.fns.items[0].debt_min);
+    try std.testing.expectEqual(@as(u32, 0), m.structural_debt);
+}
+
+test "suppressed findings do not drive debt" {
+    const alloc = std.testing.allocator;
+    var m = try testModel(alloc);
+    try m.findings.append(alloc, .{
+        .rule_id = "test-rule",
+        .severity = .@"error",
+        .message = "bad",
+        .path = "a.zig",
+        .line = 12,
+        .source = .zlint,
+        .weight = 10,
+        .suppressed = true,
+        .suppression_reason = "accepted",
+    });
+    computeDebt(&m);
+
+    try std.testing.expectEqual(@as(u32, 0), m.total_debt);
+    try std.testing.expectEqual(@as(u32, 0), m.fns.items[0].debt_min);
+}
+
+test "findings outside functions are structural" {
+    const alloc = std.testing.allocator;
+    var m = try testModel(alloc);
+    try m.findings.append(alloc, .{
+        .rule_id = "test-rule",
+        .severity = .warning,
+        .message = "bad",
+        .path = "a.zig",
+        .line = 30,
+        .source = .zlint,
+        .weight = 3,
+    });
+    computeDebt(&m);
+
+    try std.testing.expectEqual(@as(u32, 3), m.total_debt);
+    try std.testing.expectEqual(@as(u32, 0), m.fn_debt);
+    try std.testing.expectEqual(@as(u32, 3), m.structural_debt);
 }

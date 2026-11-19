@@ -6,6 +6,8 @@ const config = @import("config.zig");
 const extract = @import("extract.zig");
 const analyze = @import("analyze.zig");
 const report = @import("report.zig");
+const zlint = @import("zlint.zig");
+const check = @import("check.zig");
 
 const Model = model.Model;
 
@@ -28,6 +30,9 @@ const usage =
     \\      --no-capabilities skip allocator/Io capability analysis
     \\      --no-fields       skip field read/write and ownership analysis
     \\      --debug-io        count std.debug.print/std.log as Io requirements
+    \\      --check           print findings; exit nonzero on errors
+    \\      --format <fmt>    check output: text or json (default: text)
+    \\      --zlint-report <file>  read zlint JSONL findings
     \\  -h, --help            print this help
     \\
     \\Output: report.html, imports.dot/svg, calls.dot/svg, fields.dot/svg.
@@ -52,6 +57,9 @@ pub fn main(init: std.process.Init) !void {
     var track_capabilities = true;
     var track_fields = true;
     var debug_io = false;
+    var check_mode = false;
+    var check_format: check.Format = .text;
+    var zlint_report: ?[]const u8 = null;
     var exclude_args: std.ArrayList([]const u8) = .empty;
 
     var i: usize = 1;
@@ -122,6 +130,29 @@ pub fn main(init: std.process.Init) !void {
             track_fields = false;
         } else if (std.mem.eql(u8, arg, "--debug-io")) {
             debug_io = true;
+        } else if (std.mem.eql(u8, arg, "--check")) {
+            check_mode = true;
+        } else if (std.mem.eql(u8, arg, "--format")) {
+            i += 1;
+            if (i == args.len) {
+                std.debug.print("zigdepends: --format requires a value\n", .{});
+                std.process.exit(2);
+            }
+            if (std.mem.eql(u8, args[i], "text")) {
+                check_format = .text;
+            } else if (std.mem.eql(u8, args[i], "json")) {
+                check_format = .json;
+            } else {
+                std.debug.print("zigdepends: invalid --format value '{s}'\n", .{args[i]});
+                std.process.exit(2);
+            }
+        } else if (std.mem.eql(u8, arg, "--zlint-report")) {
+            i += 1;
+            if (i == args.len) {
+                std.debug.print("zigdepends: --zlint-report requires a value\n", .{});
+                std.process.exit(2);
+            }
+            zlint_report = args[i];
         } else if (std.mem.startsWith(u8, arg, "-")) {
             std.debug.print("zigdepends: unknown option '{s}'\n\n{s}", .{ arg, usage });
             std.process.exit(2);
@@ -195,7 +226,32 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("zigdepends: analyzing {s}\n", .{root});
     try extract.addPath(&m, io, root);
+
+    if (zlint_report) |report_arg| {
+        const report_path = if (std.fs.path.isAbsolute(report_arg))
+            try std.fs.path.resolve(arena, &.{report_arg})
+        else
+            try std.fs.path.resolve(arena, &.{ cwd, report_arg });
+        zlint.load(&m, io, report_path) catch |err| {
+            std.debug.print("zigdepends: cannot read zlint report {s}: {s}\n", .{
+                report_path,
+                @errorName(err),
+            });
+            std.process.exit(2);
+        };
+    }
+
     try analyze.run(&m);
+
+    if (check_mode) {
+        const failed = check.print(&m, io, check_format) catch |err| {
+            std.debug.print("zigdepends: cannot write findings: {s}\n", .{@errorName(err)});
+            std.process.exit(2);
+        };
+        if (failed) std.process.exit(1);
+        return;
+    }
+
     const paths = try report.write(&m, io, out_dir, with_graphs);
 
     var source_files: u32 = 0;
@@ -242,6 +298,11 @@ pub fn main(init: std.process.Init) !void {
             m.field_accesses.items.len,
         });
     }
+    std.debug.print("findings: {d}  debt: {d} zlint + {d} project minutes\n", .{
+        m.findings.items.len,
+        m.zlint_debt,
+        m.project_debt,
+    });
     std.debug.print(
         "import cycles: {d}  recursion: {d}  debt: {d} min (~{d:.1} h)\n" ++
             "report: {s}\n" ++

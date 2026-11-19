@@ -22,6 +22,7 @@ zig build -Doptimize=ReleaseSafe
 Commands:
 
 - `lint` — build/select zlint, run it, and `zig fmt --check`
+- `check` — merge zlint findings with zdepends project findings
 - `verify` — lint, gen-proto, build, test, TSan, generation check, workflow e2e
 - `e2e`, `generation-check`
 - `coverage`, `coverage-view`, `test-audit`
@@ -149,6 +150,9 @@ Flags:
 - `--no-fields` — skip field read/write and ownership analysis.
 - `--debug-io` — count `std.debug.print`, `std.debug.info`, and `std.log` as Io requirements
   (off by default).
+- `--check` — print findings and exit nonzero on errors; no report or browser.
+- `--format text|json` — check output format (default: text).
+- `--zlint-report <file>` — read zlint `--format json` JSONL findings.
 
 ### Configuration
 
@@ -168,15 +172,20 @@ Flags:
   "fields": {
     "track": true
   },
-  "rules": {
-    "loc": 60,
-    "complexity": 15,
-    "nesting": 4,
-    "params": 5,
-    "debug_output": 10
+  "findings": {
+    "error": 10,
+    "warning": 1,
+    "note": 0
+  },
+  "weights": {
+    "max-file-imports": 5
   }
 }
 ```
+
+Findings are weighted by rule ID when `weights` has an entry, otherwise by
+severity defaults. Project configuration supplies OrchEngine-specific weights
+and allowlists.
 
 Precedence: defaults < `zigdepends.json` < CLI flags. Generated detection is
 header-first (`Code generated ... DO NOT EDIT`, `@generated`) and does not
@@ -186,8 +195,8 @@ them as import-boundary nodes.
 
 Output:
 
-- `report.html` — self-contained summary, tables, cycles, call stacks, and
-  inline SVG graphs.
+- `report.html` — self-contained summary, findings, tables, cycles, call stacks,
+  and inline SVG graphs.
 - `imports.dot` / `imports.svg` — file import graph.
 - `calls.dot` / `calls.svg` — call graph of top-debt functions, recursion
   groups, and call-stack nodes.
@@ -207,8 +216,8 @@ Output:
   - `alias.foo()` → function/method in the file imported as `alias`;
   - `x.foo()` where `x` is a variable → unresolved. Type inference is out of
     scope for this version.
-- Function LOC, cyclomatic proxy, control-flow nesting, and file-level debt
-  markers.
+- Function LOC, cyclomatic proxy, control-flow nesting, and parameter counts as
+  display-only metrics. They do not create rules or debt.
 - Capability requirements:
   - direct: `std.mem.Allocator`, `std.Io`/`Io.Writer`/`Io.Reader`/`Io.Dir`/
     `Io.File` parameters, `std.process.Init`, allocator/Io API calls, and
@@ -229,28 +238,20 @@ Vendored/generated directories (`zig-cache`, `zig-out`, `zig-pkg`, `.tmp`,
 `node_modules`, `.git`) are skipped by default. `std.debug.print` and
 `std.log` are tracked as debug/logging, not as Io, unless `--debug-io` is set.
 
-### Debt rules
+### Findings and debt
 
-| Rule | Threshold / weight |
-|---|---|
-| Function length | > 60 LOC, 2 min per extra line |
-| Cyclomatic proxy | > 15, 15 min per extra point |
-| Control-flow nesting | > 4, 10 min per extra level |
-| Parameters | > 5, 10 min per extra param |
-| `pub` without doc comment | 10 min |
-| TODO / FIXME / HACK | 10 min each |
-| `std.debug.print`, `std.debug.info`, `std.log.debug/info` | 10 min each |
-| `catch {}` | 20 min each |
-| `catch unreachable` | 10 min each |
-| `@alignCast` / `@intFromPtr` / `@ptrFromInt` | 20 min each |
-| `@constCast` | 10 min each |
-| `@ptrCast` | 5 min each |
-| Import cycle | 120 min per cycle group |
-| Mutual recursion | 60 min per group |
+`--zlint-report` ingests zlint's `--format json` output. Debt is the sum of
+non-suppressed finding weights. Defaults are 10 minutes per error, 1 per
+warning, and 0 per note; `weights` overrides individual rule IDs.
 
-Self-recursion is shown in the report but does not add debt: it is normally
-intentional. The total is converted to hours and dev-days at 6 productive
-hours per day. These are heuristics, not measurements.
+Function LOC, cyclomatic proxy, nesting, and parameter counts remain visible as
+display-only metrics. They do not create findings or debt.
+
+Import and call cycles are shown in the report. Gating them as project rules is
+tracked separately. Self-recursion is normally intentional.
+
+The total is converted to hours and dev-days at 6 productive hours per day.
+These are configurable estimates, not measurements.
 
 ### Limits
 
