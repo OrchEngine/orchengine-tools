@@ -81,13 +81,13 @@ test -f "$tmp/generated/e2e_workflow_gen.zig"
 test -f "$tmp/generated/e2e_conditional_workflow_gen.zig"
 test -f "$tmp/generated/e2e-dashed_workflow_gen.zig"
 test -f "$tmp/generated/run.zig"
-test -f "$tmp/generated/registry.zig"
+test -f "$tmp/generated/registry.zon"
 grep -q 'name, "e2e"' "$tmp/generated/run.zig"
 grep -q 'name, "e2e_conditional"' "$tmp/generated/run.zig"
 grep -q 'name, "e2e-dashed"' "$tmp/generated/run.zig"
 grep -q 'const e2e_dashed = @import("e2e-dashed_workflow_gen.zig")' "$tmp/generated/run.zig"
-grep -q 'name = "e2e".*event = "orchengine.events.v1.OrderReceived"' "$tmp/generated/registry.zig"
-grep -q 'name = "e2e_conditional".*event = "orchengine.events.v1.NameSubmitted"' "$tmp/generated/registry.zig"
+grep -A1 'name = "e2e",' "$tmp/generated/registry.zon" | grep -q 'event = "orchengine.events.v1.OrderReceived"'
+grep -A1 'name = "e2e_conditional",' "$tmp/generated/registry.zon" | grep -q 'event = "orchengine.events.v1.NameSubmitted"'
 
 zig build -p "$tmp/prefix" -Dworkflows-root=.tmp/workflow-e2e/generated/run.zig
 
