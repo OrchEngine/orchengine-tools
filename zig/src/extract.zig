@@ -650,7 +650,13 @@ fn addImport(model_ptr: *Model, file_idx: u32, imp: model.Import) !void {
     const file = &model_ptr.files.items[file_idx];
     for (file.imports.items) |*existing| {
         if (std.mem.eql(u8, existing.raw, imp.raw)) {
-            if (existing.alias == null and imp.alias != null) existing.alias = imp.alias;
+            if (existing.alias == null and imp.alias != null) {
+                existing.alias = imp.alias;
+                existing.alias_start = imp.alias_start;
+            }
+            existing.test_refs += imp.test_refs;
+            existing.prod_refs += imp.prod_refs;
+            if (imp.in_test) existing.in_test = true;
             return;
         }
     }
@@ -714,6 +720,7 @@ fn extractImports(model_ptr: *Model, ast: *const Ast, source: []const u8, file_i
             .raw = lit[1 .. lit.len - 1],
             .alias = ast.tokenSlice(vd.ast.mut_token + 1),
             .line = Model.lineOf(source, ast.tokenStart(ast.nodeMainToken(init))),
+            .alias_start = ast.tokenStart(vd.ast.mut_token + 1),
         });
     }
 
@@ -733,6 +740,69 @@ fn extractImports(model_ptr: *Model, ast: *const Ast, source: []const u8, file_i
             .raw = lit[1 .. lit.len - 1],
             .line = Model.lineOf(source, ast.tokenStart(ast.nodeMainToken(node))),
         });
+    }
+}
+
+const TestSpan = struct {
+    start: u32,
+    end: u32,
+};
+
+fn collectTestSpans(gpa: Gpa, ast: *const Ast) ![]TestSpan {
+    var spans: std.ArrayList(TestSpan) = .empty;
+    errdefer spans.deinit(gpa);
+    for (ast.nodes.items(.tag), 0..) |tag, raw| {
+        if (tag != .test_decl) continue;
+        const node: Ast.Node.Index = @fromBackingInt(@intCast(raw));
+        try spans.append(gpa, .{
+            .start = model.spanStart(ast, node),
+            .end = model.spanEnd(ast, node),
+        });
+    }
+    return spans.toOwnedSlice(gpa);
+}
+
+fn insideTestSpan(spans: []const TestSpan, offset: u32) bool {
+    for (spans) |span| {
+        if (offset >= span.start and offset < span.end) return true;
+    }
+    return false;
+}
+
+/// Classifies alias references as test or production. An alias that is only
+/// referenced by test declarations is reported by the `test-only-import`
+/// project rule.
+fn markImportTestUsage(model_ptr: *Model, ast: *const Ast, file_idx: u32) !void {
+    const file = &model_ptr.files.items[file_idx];
+    if (file.imports.items.len == 0) return;
+
+    const gpa = model_ptr.gpa;
+    const spans = try collectTestSpans(gpa, ast);
+    defer gpa.free(spans);
+
+    var has_alias = false;
+    for (file.imports.items) |*imp| {
+        if (imp.alias == null) continue;
+        has_alias = true;
+        if (insideTestSpan(spans, imp.alias_start)) imp.in_test = true;
+    }
+    if (!has_alias) return;
+
+    for (ast.nodes.items(.tag), 0..) |tag, raw| {
+        if (tag != .identifier) continue;
+        const node: Ast.Node.Index = @fromBackingInt(@intCast(raw));
+        const token = ast.nodeMainToken(node);
+        const start = ast.tokenStart(token);
+        const text = ast.tokenSlice(token);
+        for (file.imports.items) |*imp| {
+            const alias = imp.alias orelse continue;
+            if (!std.mem.eql(u8, alias, text)) continue;
+            if (insideTestSpan(spans, start)) {
+                imp.test_refs += 1;
+            } else {
+                imp.prod_refs += 1;
+            }
+        }
     }
 }
 
@@ -773,6 +843,7 @@ fn parseFile(model_ptr: *Model, io: Io, path: []const u8, rel_path: []const u8) 
     // Imports are always extracted, even for generated files, so the
     // dependency graph keeps its boundary nodes.
     try extractImports(model_ptr, &ast, source, file_idx);
+    try markImportTestUsage(model_ptr, &ast, file_idx);
 
     if (generated) {
         listFile(model_ptr, "generated", rel_path, generated_reason.?);
@@ -1076,4 +1147,122 @@ test "nesting depth counts loops and switch" {
     const node = fn_node orelse return error.TestExpectedFunction;
     const depth = nestingDepth(&ast, model.spanStart(&ast, node), model.spanEnd(&ast, node));
     try std.testing.expectEqual(@as(u32, 3), depth);
+}
+
+fn extractTestSource(alloc: Gpa, source: []const u8) !Model {
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    const file_idx = try m.addFile("src/a.zig", source);
+    var ast = try Ast.parse(alloc, source, .{});
+    try extractImports(&m, &ast, source, file_idx);
+    try markImportTestUsage(&m, &ast, file_idx);
+    return m;
+}
+
+fn importByAlias(m: *const Model, file_idx: u32, alias: []const u8) !model.Import {
+    for (m.files.items[file_idx].imports.items) |imp| {
+        const existing = imp.alias orelse continue;
+        if (std.mem.eql(u8, existing, alias)) return imp;
+    }
+    return error.TestExpectedImport;
+}
+
+test "marks an import used only in tests" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const m = try extractTestSource(alloc,
+        \\const std = @import("std");
+        \\const helper = @import("helper.zig");
+        \\const prod = @import("prod.zig");
+        \\
+        \\pub fn use() void {
+        \\    _ = prod.value;
+        \\}
+        \\
+        \\test "uses helper" {
+        \\    _ = helper.value;
+        \\}
+    );
+
+    const helper = try importByAlias(&m, 0, "helper");
+    try std.testing.expectEqual(@as(u32, 1), helper.test_refs);
+    try std.testing.expectEqual(@as(u32, 0), helper.prod_refs);
+    try std.testing.expect(!helper.in_test);
+
+    const prod = try importByAlias(&m, 0, "prod");
+    try std.testing.expectEqual(@as(u32, 0), prod.test_refs);
+    try std.testing.expectEqual(@as(u32, 1), prod.prod_refs);
+}
+
+test "marks imports declared inside a test" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const m = try extractTestSource(alloc,
+        \\test "local helper" {
+        \\    const local = @import("local.zig");
+        \\    _ = local.value;
+        \\}
+    );
+
+    const local = try importByAlias(&m, 0, "local");
+    try std.testing.expect(local.in_test);
+    try std.testing.expectEqual(@as(u32, 1), local.test_refs);
+    try std.testing.expectEqual(@as(u32, 0), local.prod_refs);
+}
+
+test "direct imports have no alias" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const m = try extractTestSource(alloc,
+        \\comptime {
+        \\    _ = @import("all_tests.zig");
+        \\}
+    );
+
+    const imp = m.files.items[0].imports.items[0];
+    try std.testing.expect(imp.alias == null);
+    try std.testing.expectEqual(@as(u32, 0), imp.test_refs);
+    try std.testing.expectEqual(@as(u32, 0), imp.prod_refs);
+}
+
+test "counts alias references in types and builtins" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const m = try extractTestSource(alloc,
+        \\const types = @import("types.zig");
+        \\const helpers = @import("helpers.zig");
+        \\const ignored = @import("ignored.zig");
+        \\
+        \\pub fn use(x: types.Value) void {
+        \\    _ = x;
+        \\    _ = @hasDecl(helpers, "answer");
+        \\}
+        \\
+        \\test "ignored" {
+        \\    _ = ignored;
+        \\}
+    );
+
+    const types = try importByAlias(&m, 0, "types");
+    try std.testing.expectEqual(@as(u32, 1), types.prod_refs);
+    try std.testing.expectEqual(@as(u32, 0), types.test_refs);
+
+    const helpers = try importByAlias(&m, 0, "helpers");
+    try std.testing.expectEqual(@as(u32, 1), helpers.prod_refs);
+
+    const ignored = try importByAlias(&m, 0, "ignored");
+    try std.testing.expectEqual(@as(u32, 0), ignored.prod_refs);
+    try std.testing.expectEqual(@as(u32, 1), ignored.test_refs);
 }

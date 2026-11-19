@@ -40,6 +40,16 @@ pub const project_rule_ids = [_][]const u8{
     "call-cycle",
     "uncalled-private-function",
     "architecture",
+    "test-only-import",
+};
+
+/// Test roots keep direct imports for discoverability, so their aliases are
+/// allowed to be referenced only from tests. Projects can extend this list in
+/// `zigdepends.json` with `test_roots`.
+pub const default_test_roots = [_][]const u8{
+    "src/unit_tests.zig",
+    "src/integration_tests.zig",
+    "customworkflows/generated.zig",
 };
 
 pub const Settings = struct {
@@ -106,6 +116,7 @@ pub const Config = struct {
     exclude: std.ArrayList([]const u8) = .empty,
     generated_paths: std.ArrayList([]const u8) = .empty,
     generated_markers: std.ArrayList([]const u8) = .empty,
+    test_roots: std.ArrayList([]const u8) = .empty,
     include_generated_metrics: bool = false,
     debug_io: bool = false,
     track_capabilities: bool = true,
@@ -127,6 +138,14 @@ pub const Import = struct {
     raw: []const u8,
     alias: ?[]const u8 = null,
     line: u32,
+    /// Byte offset of the alias token, used to tell whether the import itself
+    /// lives inside a test declaration.
+    alias_start: u32 = 0,
+    /// Alias references inside and outside test declarations.
+    test_refs: u32 = 0,
+    prod_refs: u32 = 0,
+    /// The import declaration is nested inside a test.
+    in_test: bool = false,
     resolved: ?u32 = null,
     excluded: bool = false,
 };
@@ -300,6 +319,18 @@ pub const Model = struct {
 
     pub fn projectSeverity(self: *const Model, rule_id: []const u8) Severity {
         return self.config.project_rule_severities.get(rule_id) orelse .warning;
+    }
+
+    pub fn isTestRoot(self: *const Model, rel_path: []const u8) bool {
+        for (self.config.test_roots.items) |root| {
+            if (pathMatches(root, rel_path)) return true;
+        }
+        for (default_test_roots) |root| {
+            if (pathMatches(root, rel_path)) return true;
+        }
+        const basename = std.fs.path.basename(rel_path);
+        return std.mem.eql(u8, basename, "unit_tests.zig") or
+            std.mem.eql(u8, basename, "integration_tests.zig");
     }
 
     pub fn validateProjectConfig(self: *const Model) !void {
@@ -481,4 +512,26 @@ test "apply project suppressions" {
 
     try std.testing.expect(m.findings.items[0].suppressed);
     try std.testing.expectEqualStrings("legacy", m.findings.items[0].suppression_reason.?);
+}
+
+test "test roots honor defaults and configured globs" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+
+    try std.testing.expect(m.isTestRoot("src/unit_tests.zig"));
+    try std.testing.expect(m.isTestRoot("src/integration_tests.zig"));
+    try std.testing.expect(m.isTestRoot("customworkflows/generated.zig"));
+    try std.testing.expect(m.isTestRoot("nested/integration_tests.zig"));
+    try std.testing.expect(!m.isTestRoot("src/unit_test_helpers.zig"));
+
+    try m.config.test_roots.append(alloc, "src/test/**");
+    try std.testing.expect(m.isTestRoot("src/test/helpers.zig"));
 }

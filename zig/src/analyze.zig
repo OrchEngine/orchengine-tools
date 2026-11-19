@@ -10,6 +10,7 @@ pub fn run(model_ptr: *Model) !void {
     if (model_ptr.config.track_capabilities) computeCapabilities(model_ptr);
     try findCycles(model_ptr);
     try addImportCycleFindings(model_ptr);
+    try addTestOnlyImportFindings(model_ptr);
     model_ptr.applySuppressions();
     computeDebt(model_ptr);
     try computeChains(model_ptr);
@@ -411,6 +412,34 @@ fn addImportCycleFindings(model_ptr: *Model) !void {
     }
 }
 
+fn addTestOnlyImportFindings(model_ptr: *Model) !void {
+    const gpa = model_ptr.gpa;
+    const severity = model_ptr.projectSeverity("test-only-import");
+    for (model_ptr.files.items, 0..) |file, file_idx| {
+        if (file.generated) continue;
+        const label = model_ptr.fileLabel(@intCast(file_idx));
+        if (model_ptr.isTestRoot(label)) continue;
+        for (file.imports.items) |imp| {
+            if (imp.in_test or imp.resolved == null) continue;
+            const alias = imp.alias orelse continue;
+            if (imp.test_refs == 0 or imp.prod_refs > 0) continue;
+            try model_ptr.findings.append(gpa, .{
+                .rule_id = "test-only-import",
+                .severity = severity,
+                .message = try std.fmt.allocPrint(gpa, "import '{s}' from \"{s}\" is only used by tests", .{
+                    alias,
+                    imp.raw,
+                }),
+                .path = label,
+                .line = imp.line,
+                .source = .project,
+                .weight = model_ptr.findingWeight("test-only-import", severity),
+                .key = try std.fmt.allocPrint(gpa, "{s}:{s}", .{ label, alias }),
+            });
+        }
+    }
+}
+
 fn cycleHasGenerated(model_ptr: *Model, cycle: model.Cycle) bool {
     for (cycle.nodes) |file_idx| {
         if (model_ptr.files.items[file_idx].generated) return true;
@@ -760,4 +789,152 @@ test "import cycle finding and suppression" {
 
     try std.testing.expect(m.findings.items[0].suppressed);
     try std.testing.expectEqual(@as(u32, 0), m.total_debt);
+}
+
+test "test-only import finding and suppression" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    const source = try m.addFile("a.zig", "");
+    const helper = try m.addFile("helper.zig", "");
+    try m.files.items[source].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .alias = "helper",
+        .line = 2,
+        .test_refs = 1,
+        .prod_refs = 0,
+        .resolved = helper,
+    });
+
+    try addTestOnlyImportFindings(&m);
+
+    try std.testing.expectEqual(@as(usize, 1), m.findings.items.len);
+    const finding = m.findings.items[0];
+    try std.testing.expectEqualStrings("test-only-import", finding.rule_id);
+    try std.testing.expectEqual(model.Severity.warning, finding.severity);
+    try std.testing.expectEqualStrings("a.zig", finding.path);
+    try std.testing.expectEqual(@as(u32, 2), finding.line);
+    try std.testing.expectEqualStrings("a.zig:helper", finding.key.?);
+    try std.testing.expect(std.mem.indexOf(u8, finding.message, "only used by tests") != null);
+
+    try m.config.suppressions.append(alloc, .{
+        .rule_id = "test-only-import",
+        .key = "a.zig:helper",
+        .reason = "test helper",
+    });
+    m.applySuppressions();
+    computeDebt(&m);
+
+    try std.testing.expect(m.findings.items[0].suppressed);
+    try std.testing.expectEqual(@as(u32, 0), m.total_debt);
+}
+
+test "test-only import skips roots, generated files, and test-local imports" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    const helper = try m.addFile("helper.zig", "");
+
+    const root_idx = try m.addFile("src/unit_tests.zig", "");
+    try m.files.items[root_idx].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .alias = "helper",
+        .line = 2,
+        .test_refs = 1,
+        .resolved = helper,
+    });
+
+    const generated_idx = try m.addFile("src/gen.zig", "");
+    m.files.items[generated_idx].generated = true;
+    try m.files.items[generated_idx].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .alias = "helper",
+        .line = 2,
+        .test_refs = 1,
+        .resolved = helper,
+    });
+
+    const local_idx = try m.addFile("src/local.zig", "");
+    try m.files.items[local_idx].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .alias = "helper",
+        .line = 2,
+        .test_refs = 1,
+        .in_test = true,
+        .resolved = helper,
+    });
+
+    const prod_idx = try m.addFile("src/prod.zig", "");
+    try m.files.items[prod_idx].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .alias = "helper",
+        .line = 2,
+        .test_refs = 1,
+        .prod_refs = 1,
+        .resolved = helper,
+    });
+
+    const unresolved_idx = try m.addFile("src/unresolved.zig", "");
+    try m.files.items[unresolved_idx].imports.append(alloc, .{
+        .raw = "missing.zig",
+        .alias = "missing",
+        .line = 2,
+        .test_refs = 1,
+    });
+
+    try m.config.test_roots.append(alloc, "src/custom_root.zig");
+    const custom_idx = try m.addFile("src/custom_root.zig", "");
+    try m.files.items[custom_idx].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .alias = "helper",
+        .line = 2,
+        .test_refs = 1,
+        .resolved = helper,
+    });
+
+    try addTestOnlyImportFindings(&m);
+    try std.testing.expectEqual(@as(usize, 0), m.findings.items.len);
+}
+
+test "test-only import uses configured severity and weight" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    const source = try m.addFile("a.zig", "");
+    const helper = try m.addFile("helper.zig", "");
+    try m.files.items[source].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .alias = "helper",
+        .line = 2,
+        .test_refs = 1,
+        .resolved = helper,
+    });
+    try m.config.project_rule_severities.put(alloc, "test-only-import", .@"error");
+
+    try addTestOnlyImportFindings(&m);
+
+    try std.testing.expectEqual(@as(usize, 1), m.findings.items.len);
+    try std.testing.expectEqual(model.Severity.@"error", m.findings.items[0].severity);
+    try std.testing.expectEqual(@as(u32, 10), m.findings.items[0].weight);
 }
