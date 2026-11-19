@@ -11,6 +11,7 @@ pub fn run(model_ptr: *Model) !void {
     try findCycles(model_ptr);
     try addImportCycleFindings(model_ptr);
     try addCallCycleFindings(model_ptr);
+    try addUncalledPrivateFindings(model_ptr);
     try addTestOnlyImportFindings(model_ptr);
     model_ptr.applySuppressions();
     computeDebt(model_ptr);
@@ -496,6 +497,52 @@ fn callCycleMessage(model_ptr: *Model, members: []const u32) ![]const u8 {
     return aw.toOwnedSlice();
 }
 
+fn addUncalledPrivateFindings(model_ptr: *Model) !void {
+    const gpa = model_ptr.gpa;
+    const severity = model_ptr.projectSeverity("uncalled-private-function");
+    for (model_ptr.files.items, 0..) |file, file_idx| {
+        if (file.generated) continue;
+        for (file.fns.items) |fn_idx| {
+            const f = model_ptr.fns.items[fn_idx];
+            if (f.is_pub or f.parent != null or f.name.len == 0) continue;
+            if (std.mem.eql(u8, f.name, "main")) continue;
+            const decl = file.source[f.start..f.end];
+            if (declarationIsExported(decl)) continue;
+            if (countNameMentions(model_ptr, f.name) > 1) continue;
+
+            try model_ptr.findings.append(gpa, .{
+                .rule_id = "uncalled-private-function",
+                .severity = severity,
+                .message = try std.fmt.allocPrint(gpa, "private function '{s}' is not referenced", .{f.name}),
+                .path = model_ptr.fileLabel(@intCast(file_idx)),
+                .line = f.line,
+                .end_line = f.end_line,
+                .source = .project,
+                .weight = model_ptr.findingWeight("uncalled-private-function", severity),
+                .key = try std.fmt.allocPrint(gpa, "{s}:{s}", .{
+                    model_ptr.fileLabel(@intCast(file_idx)),
+                    f.name,
+                }),
+            });
+        }
+    }
+}
+
+fn declarationIsExported(decl: []const u8) bool {
+    const head = decl[0..@min(decl.len, 32)];
+    return std.mem.indexOf(u8, head, "export") != null or
+        std.mem.indexOf(u8, head, "extern") != null;
+}
+
+fn countNameMentions(model_ptr: *Model, name: []const u8) u32 {
+    var count: u32 = 0;
+    for (model_ptr.files.items) |file| {
+        if (file.generated) continue;
+        count += model.countOccurrences(file.source, name);
+    }
+    return count;
+}
+
 fn addTestOnlyImportFindings(model_ptr: *Model) !void {
     const gpa = model_ptr.gpa;
     const severity = model_ptr.projectSeverity("test-only-import");
@@ -934,6 +981,70 @@ test "call cycle finding and suppression" {
         .rule_id = "call-cycle",
         .key = "a.zig:f,a.zig:g",
         .reason = "bounded parser recursion",
+    });
+    m.applySuppressions();
+    computeDebt(&m);
+
+    try std.testing.expect(m.findings.items[0].suppressed);
+    try std.testing.expectEqual(@as(u32, 0), m.total_debt);
+}
+
+test "uncalled private function finding and suppression" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    const source = "fn unused() void {}\nfn used() void {}\ntest { used(); }\n";
+    const file = try m.addFile("a.zig", source);
+    const unused_start = std.mem.indexOf(u8, source, "fn unused").?;
+    const used_start = std.mem.indexOf(u8, source, "fn used").?;
+    try m.fns.append(alloc, .{
+        .name = "unused",
+        .file = file,
+        .line = 1,
+        .end_line = 1,
+        .start = @intCast(unused_start),
+        .end = @intCast(unused_start + "fn unused() void {}".len),
+        .params = 0,
+        .complexity = 1,
+        .nesting = 0,
+        .loc = 1,
+        .is_pub = false,
+        .has_doc = false,
+    });
+    try m.fns.append(alloc, .{
+        .name = "used",
+        .file = file,
+        .line = 2,
+        .end_line = 2,
+        .start = @intCast(used_start),
+        .end = @intCast(used_start + "fn used() void {}".len),
+        .params = 0,
+        .complexity = 1,
+        .nesting = 0,
+        .loc = 1,
+        .is_pub = false,
+        .has_doc = false,
+    });
+    try m.files.items[file].fns.append(alloc, 1);
+
+    try addUncalledPrivateFindings(&m);
+
+    try std.testing.expectEqual(@as(usize, 1), m.findings.items.len);
+    const finding = m.findings.items[0];
+    try std.testing.expectEqualStrings("uncalled-private-function", finding.rule_id);
+    try std.testing.expectEqualStrings("a.zig:unused", finding.key.?);
+
+    try m.config.suppressions.append(alloc, .{
+        .rule_id = "uncalled-private-function",
+        .key = "a.zig:unused",
+        .reason = "reserved for the public facade",
     });
     m.applySuppressions();
     computeDebt(&m);
