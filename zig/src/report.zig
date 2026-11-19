@@ -368,6 +368,47 @@ fn htmlEscape(w: *std.Io.Writer, s: []const u8) !void {
     }
 }
 
+fn writeFindings(model_ptr: *Model, w: *std.Io.Writer) !void {
+    try w.writeAll("<section><h2>Findings</h2>\n");
+    if (model_ptr.findings.items.len == 0) {
+        try w.writeAll("<p class=\"muted\">None.</p></section>\n");
+        return;
+    }
+
+    try w.writeAll("<div class=\"table-wrap\"><table><thead><tr><th>Severity</th><th>Rule</th><th>Location</th><th>Message</th><th>Source</th></tr></thead><tbody>\n");
+    for (model_ptr.findings.items) |finding| {
+        const pill = switch (finding.severity) {
+            .@"error" => "red",
+            .warning => "orange",
+            .note => "",
+        };
+        try w.print("<tr><td><span class=\"pill {s}\">{s}</span></td><td class=\"mono\">", .{
+            pill,
+            @tagName(finding.severity),
+        });
+        try htmlEscape(w, finding.rule_id);
+        try w.writeAll("</td><td class=\"mono\">");
+        if (model_ptr.fileIndexByPath(finding.path)) |file_idx| {
+            try htmlEscape(w, model_ptr.fileLabel(file_idx));
+        } else {
+            try htmlEscape(w, finding.path);
+        }
+        if (finding.line > 0) try w.print(":{d}", .{finding.line});
+        try w.writeAll("</td><td>");
+        try htmlEscape(w, finding.message);
+        if (finding.suppressed) {
+            try w.writeAll(" <span class=\"pill\">suppressed");
+            if (finding.suppression_reason) |reason| {
+                try w.writeAll(": ");
+                try htmlEscape(w, reason);
+            }
+            try w.writeAll("</span>");
+        }
+        try w.print("</td><td>{s}</td></tr>\n", .{@tagName(finding.source)});
+    }
+    try w.writeAll("</tbody></table></div></section>\n");
+}
+
 fn writeHtml(
     model_ptr: *Model,
     io: Io,
@@ -711,12 +752,10 @@ fn writeHtml(
 
     // Debt table.
     try w.writeAll("<section><h2>Technical debt</h2>\n");
-    try w.print("<p class=\"muted\">Heuristic estimate: {d} minutes total — {d} function rules, {d} file patterns ({d} debug output), {d} cycle penalties. Assumes 6 productive hours per dev-day.</p>\n", .{
+    try w.print("<p class=\"muted\">Findings estimate: {d} minutes total — {d} zlint, {d} project. Assumes 6 productive hours per dev-day.</p>\n", .{
         model_ptr.total_debt,
-        model_ptr.fn_debt,
-        model_ptr.structural_debt,
-        model_ptr.debug_debt,
-        model_ptr.cycle_debt,
+        model_ptr.zlint_debt,
+        model_ptr.project_debt,
     });
     try w.writeAll("<div class=\"toolbar\"><input type=\"search\" id=\"debt-filter\" placeholder=\"filter functions…\"><span class=\"muted\">Click a header to sort. Showing up to 250 highest-debt functions.</span></div>\n");
     try w.writeAll("<div class=\"table-wrap\"><table id=\"debt-table\"><thead><tr><th data-sort=\"num\">Score</th><th>Function</th><th>Location</th><th data-sort=\"num\">LOC</th><th data-sort=\"num\">Cx</th><th data-sort=\"num\">Nest</th><th data-sort=\"num\">Params</th><th>Flags</th></tr></thead><tbody>\n");
@@ -747,14 +786,12 @@ fn writeHtml(
         if (f.in_call_cycle) try w.writeAll("<span class=\"pill red\">call cycle</span>");
         if (model_ptr.config.track_capabilities) try capabilityPills(w, f);
         if (f.is_pub) try w.writeAll("<span class=\"pill purple\">pub</span>");
-        if (f.is_pub and !f.has_doc) try w.writeAll("<span class=\"pill orange\">no doc</span>");
-        if (f.loc > s.loc_threshold) try w.writeAll("<span class=\"pill\">long</span>");
-        if (f.complexity > s.cx_threshold) try w.writeAll("<span class=\"pill\">complex</span>");
-        if (f.nesting > s.nest_threshold) try w.writeAll("<span class=\"pill\">deep</span>");
         try w.writeAll("</td></tr>\n");
     }
     if (shown == 0) try w.writeAll("<tr><td colspan=\"8\" class=\"muted\">No debt above the current threshold.</td></tr>\n");
     try w.writeAll("</tbody></table></div></section>\n");
+
+    try writeFindings(model_ptr, w);
 
     // Cycles.
     try w.writeAll("<section><h2>Circular references</h2>\n<p class=\"muted\">Import cycles usually indicate architectural coupling. Call cycles are recursion; self-recursion is normal, mutual recursion is worth reviewing.</p>\n<div class=\"cols\"><div><h3>Import cycles</h3>\n");
@@ -847,7 +884,7 @@ fn writeHtml(
     try w.writeAll("</section>\n");
 
     // Files.
-    try w.writeAll("<section><h2>Files</h2>\n<table><thead><tr><th>File</th><th data-sort=\"num\">Functions</th><th data-sort=\"num\">Debt</th><th data-sort=\"num\">Imports</th><th data-sort=\"num\">TODO</th><th data-sort=\"num\">Debug</th><th data-sort=\"num\">Unreachable</th><th data-sort=\"num\">Casts</th></tr></thead><tbody>\n");
+    try w.writeAll("<section><h2>Files</h2>\n<table><thead><tr><th>File</th><th data-sort=\"num\">Functions</th><th data-sort=\"num\">Debt</th><th data-sort=\"num\">Imports</th></tr></thead><tbody>\n");
     var file_order = try model_ptr.gpa.alloc(u32, model_ptr.files.items.len);
     for (0..file_order.len) |i| file_order[i] = @intCast(i);
     std.mem.sort(u32, file_order, model_ptr, lessFileDebt);
@@ -857,14 +894,10 @@ fn writeHtml(
         try w.writeAll("<tr><td class=\"mono\">");
         try htmlEscape(w, model_ptr.fileLabel(file_idx));
         if (file.generated) try w.writeAll(" <span class=\"pill\">generated</span>");
-        try w.print("</td><td>{d}</td><td>{d}</td><td>{d}</td><td>{d}</td><td>{d}</td><td>{d}</td><td>{d}</td></tr>\n", .{
+        try w.print("</td><td>{d}</td><td>{d}</td><td>{d}</td></tr>\n", .{
             file.fns.items.len,
             file.debt_min,
             file.imports.items.len,
-            file.todo_count,
-            file.debug_output_count,
-            file.unreachable_count,
-            file.ptr_cast_count + file.align_cast_count + file.const_cast_count + file.from_int_count,
         });
     }
     try w.writeAll("</tbody></table></section>\n");
@@ -931,13 +964,7 @@ fn writeHtml(
     try w.writeAll("<p class=\"muted\">Comptime dispatch, function pointers, and calls through interface-like values are expected to remain unresolved.</p>\n");
     try w.writeAll("</div></div></section>\n");
 
-    try w.writeAll("</main>\n<footer>Generated by zigdepends. Thresholds: LOC &gt; ");
-    try w.print("{d}", .{s.loc_threshold});
-    try w.writeAll(", cyclomatic &gt; ");
-    try w.print("{d}", .{s.cx_threshold});
-    try w.writeAll(", nesting &gt; ");
-    try w.print("{d}", .{s.nest_threshold});
-    try w.writeAll(". Debt weights are configurable heuristics, not measurements.</footer>\n");
+    try w.writeAll("</main>\n<footer>Generated by zigdepends. Debt is computed from zlint and project findings. Weights are configurable, not measurements.</footer>\n");
 
     try w.writeAll(
         \\<script>

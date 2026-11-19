@@ -74,14 +74,26 @@ pub fn load(model_ptr: *Model, io: Io, path: []const u8) !void {
         }
     }
 
-    if (obj.get("rules")) |rules_value| {
-        switch (rules_value) {
-            .object => |rules| {
-                if (asU32(rules.get("loc"))) |n| model_ptr.settings.loc_threshold = n;
-                if (asU32(rules.get("complexity"))) |n| model_ptr.settings.cx_threshold = n;
-                if (asU32(rules.get("nesting"))) |n| model_ptr.settings.nest_threshold = n;
-                if (asU32(rules.get("params"))) |n| model_ptr.settings.param_threshold = n;
-                if (asU32(rules.get("debug_output"))) |n| model_ptr.settings.debug_output_weight = n;
+    if (obj.get("findings")) |findings_value| {
+        switch (findings_value) {
+            .object => |findings| {
+                if (asU32(findings.get("error"))) |n| model_ptr.config.default_error_weight = n;
+                if (asU32(findings.get("warning"))) |n| model_ptr.config.default_warning_weight = n;
+                if (asU32(findings.get("note"))) |n| model_ptr.config.default_note_weight = n;
+            },
+            else => {},
+        }
+    }
+
+    if (obj.get("weights")) |weights_value| {
+        switch (weights_value) {
+            .object => |weights| {
+                var it = weights.iterator();
+                while (it.next()) |entry| {
+                    if (asU32(entry.value_ptr.*)) |weight| {
+                        try model_ptr.config.rule_weights.put(gpa, entry.key_ptr.*, weight);
+                    }
+                }
             },
             else => {},
         }

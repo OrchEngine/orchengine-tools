@@ -13,7 +13,8 @@ const usage =
     \\
     \\commands:
     \\  lint              build/select zlint and run it on target
-    \\  verify            lint, gen-proto, build, test, TSan, generation, e2e
+    \\  check             zlint findings + zdepends project findings
+    \\  verify            check, gen-proto, build, test, TSan, generation, e2e
     \\  e2e               run the workflow end-to-end check
     \\  generation-check  check generated files are current
     \\  coverage          build test binaries and run kcov
@@ -112,6 +113,7 @@ fn dispatch(
     release: bool,
 ) !void {
     if (std.mem.eql(u8, command, "lint")) return cmdLint(io, arena, zig_dir, target, release);
+    if (std.mem.eql(u8, command, "check")) return cmdCheck(io, arena, zig_dir, target, release);
     if (std.mem.eql(u8, command, "verify")) return cmdVerify(io, arena, zig_dir, target, release);
     if (std.mem.eql(u8, command, "e2e")) return cmdE2e(io, arena, zig_dir, target);
     if (std.mem.eql(u8, command, "generation-check")) return cmdGenerationCheck(io, arena, zig_dir, target);
@@ -131,16 +133,38 @@ fn dispatch(
     std.process.exit(2);
 }
 
-fn cmdLint(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, target: []const u8, release: bool) !void {
-    var bin: []const u8 = undefined;
+fn selectZlint(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, release: bool) ![]const u8 {
     if (release) {
         try runTool(io, arena, zig_dir, "zlint-download");
-        bin = try std.fs.path.join(arena, &.{ zig_dir, ".tmp", "zlint", "zlint" });
-    } else {
-        try runTool(io, arena, zig_dir, "zlint-rules-build");
-        bin = try std.fs.path.join(arena, &.{ zig_dir, "bin", "zlint-orche" });
+        return std.fs.path.join(arena, &.{ zig_dir, ".tmp", "zlint", "zlint" });
     }
+    try runTool(io, arena, zig_dir, "zlint-rules-build");
+    return std.fs.path.join(arena, &.{ zig_dir, "bin", "zlint-orche" });
+}
+
+fn cmdLint(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, target: []const u8, release: bool) !void {
+    const bin = try selectZlint(io, arena, zig_dir, release);
     try run(io, &.{bin}, target);
+    try runTask(io, arena, zig_dir, "fmt-check.sh", target);
+}
+
+fn cmdCheck(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, target: []const u8, release: bool) !void {
+    const zlint_bin = try selectZlint(io, arena, zig_dir, release);
+    const tmp_dir = try std.fs.path.join(arena, &.{ zig_dir, ".tmp" });
+    try std.Io.Dir.cwd().createDirPath(io, tmp_dir);
+    const report = try std.fs.path.join(arena, &.{ tmp_dir, "zlint-report.jsonl" });
+
+    try run(io, &.{
+        "bash",
+        "-c",
+        "\"$1\" --format json . > \"$2\"; status=$?; [ \"$status\" -eq 0 ] || [ \"$status\" -eq 1 ]",
+        "orche",
+        zlint_bin,
+        report,
+    }, target);
+
+    const zdepends = try std.fs.path.join(arena, &.{ zig_dir, "zig-out", "bin", "zigdepends" });
+    try run(io, &.{ zdepends, "--check", "--zlint-report", report, target }, null);
     try runTask(io, arena, zig_dir, "fmt-check.sh", target);
 }
 
