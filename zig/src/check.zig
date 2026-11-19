@@ -32,10 +32,11 @@ pub fn write(model_ptr: *Model, w: *std.Io.Writer, format: Format) !bool {
 fn writeText(model_ptr: *Model, w: *std.Io.Writer) !void {
     for (model_ptr.findings.items) |finding| {
         const path = if (finding.path.len == 0) "?" else finding.path;
+        const level = if (finding.suppressed) "suppressed" else @tagName(finding.severity);
         try w.print("{s}:{d}: {s} [{s}] {s}", .{
             path,
             finding.line,
-            @tagName(finding.severity),
+            level,
             finding.rule_id,
             finding.message,
         });
