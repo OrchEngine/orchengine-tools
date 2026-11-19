@@ -3,6 +3,34 @@
 Static analysis for Zig projects, built for `~/Projects/orchengine-zig`. Like
 the Go tools, nothing here is imported by the analyzed project.
 
+## orche
+
+`orche` is the tooling runner. It operates on a target checkout and keeps all
+tool implementation out of the analyzed repository.
+
+```bash
+cd ~/Projects/orchengine-tools/zig
+zig build -Doptimize=ReleaseSafe
+
+# local source build of zlint + full gate
+./zig-out/bin/orche verify ~/Projects/orchengine-zig
+
+# CI: use the pinned prebuilt zlint
+./zig-out/bin/orche verify --release ~/Projects/orchengine-zig
+```
+
+Commands:
+
+- `lint` — build/select zlint, run it, and `zig fmt --check`
+- `verify` — lint, gen-proto, build, test, TSan, generation check, workflow e2e
+- `e2e`, `generation-check`
+- `coverage`, `coverage-view`, `test-audit`
+- `ui-proof`, `ui-proof-view`
+- `typecheck-js`, `test-js`, `build-ui`, `test-ui`, `test-ui-update`, `watch-ui`
+
+`orche` is Linux-only for now. The multiplatform follow-up is
+[#26](https://github.com/OrchEngine/orchengine-tools/issues/26).
+
 ## zlint rules
 
 OrchEngine's per-file zlint rules live in `zlint_rules/` and are compiled into
