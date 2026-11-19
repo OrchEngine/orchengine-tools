@@ -10,6 +10,7 @@ pub fn run(model_ptr: *Model) !void {
     if (model_ptr.config.track_capabilities) computeCapabilities(model_ptr);
     try findCycles(model_ptr);
     try addImportCycleFindings(model_ptr);
+    try addCallCycleFindings(model_ptr);
     try addTestOnlyImportFindings(model_ptr);
     model_ptr.applySuppressions();
     computeDebt(model_ptr);
@@ -412,6 +413,89 @@ fn addImportCycleFindings(model_ptr: *Model) !void {
     }
 }
 
+fn addCallCycleFindings(model_ptr: *Model) !void {
+    const gpa = model_ptr.gpa;
+    const severity = model_ptr.projectSeverity("call-cycle");
+    for (model_ptr.call_cycles.items) |cycle| {
+        if (cycle.nodes.len == 0) continue;
+        if (callCycleHasGenerated(model_ptr, cycle)) continue;
+
+        const members = try sortedCallCycleMembers(model_ptr, cycle);
+        const first = model_ptr.fns.items[members[0]];
+        try model_ptr.findings.append(gpa, .{
+            .rule_id = "call-cycle",
+            .severity = severity,
+            .message = try callCycleMessage(model_ptr, members),
+            .path = model_ptr.fileLabel(first.file),
+            .line = first.line,
+            .end_line = first.end_line,
+            .source = .project,
+            .weight = model_ptr.findingWeight("call-cycle", severity),
+            .key = try callCycleKey(model_ptr, members),
+        });
+    }
+}
+
+fn callCycleHasGenerated(model_ptr: *Model, cycle: model.Cycle) bool {
+    for (cycle.nodes) |fn_idx| {
+        const file_idx = model_ptr.fns.items[fn_idx].file;
+        if (model_ptr.files.items[file_idx].generated) return true;
+    }
+    return false;
+}
+
+fn sortedCallCycleMembers(model_ptr: *Model, cycle: model.Cycle) ![]u32 {
+    const members = try model_ptr.gpa.dupe(u32, cycle.nodes);
+    std.mem.sort(u32, members, model_ptr, struct {
+        fn less(m: *Model, a: u32, b: u32) bool {
+            const fa = m.fns.items[a];
+            const fb = m.fns.items[b];
+            const la = m.fileLabel(fa.file);
+            const lb = m.fileLabel(fb.file);
+            const file_order = std.mem.order(u8, la, lb);
+            if (file_order != .eq) return file_order == .lt;
+            const na = fnDisplayName(m, a);
+            const nb = fnDisplayName(m, b);
+            return std.mem.lessThan(u8, na, nb);
+        }
+    }.less);
+    return members;
+}
+
+fn fnDisplayName(model_ptr: *Model, fn_idx: u32) []const u8 {
+    const f = model_ptr.fns.items[fn_idx];
+    if (f.parent) |parent| {
+        return std.fmt.allocPrint(model_ptr.gpa, "{s}.{s}", .{ parent, f.name }) catch f.name;
+    }
+    return f.name;
+}
+
+fn callCycleKey(model_ptr: *Model, members: []const u32) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (members, 0..) |fn_idx, index| {
+        if (index != 0) try out.append(model_ptr.gpa, ',');
+        try out.appendSlice(model_ptr.gpa, model_ptr.fileLabel(model_ptr.fns.items[fn_idx].file));
+        try out.append(model_ptr.gpa, ':');
+        try out.appendSlice(model_ptr.gpa, fnDisplayName(model_ptr, fn_idx));
+    }
+    return out.toOwnedSlice(model_ptr.gpa);
+}
+
+fn callCycleMessage(model_ptr: *Model, members: []const u32) ![]const u8 {
+    var aw = std.Io.Writer.Allocating.init(model_ptr.gpa);
+    defer aw.deinit();
+    if (members.len == 1) {
+        try aw.writer.print("self-recursion: {s}", .{fnDisplayName(model_ptr, members[0])});
+    } else {
+        try aw.writer.writeAll("mutual recursion: ");
+        for (members) |fn_idx| {
+            try aw.writer.print("{s} -> ", .{fnDisplayName(model_ptr, fn_idx)});
+        }
+        try aw.writer.writeAll(fnDisplayName(model_ptr, members[0]));
+    }
+    return aw.toOwnedSlice();
+}
+
 fn addTestOnlyImportFindings(model_ptr: *Model) !void {
     const gpa = model_ptr.gpa;
     const severity = model_ptr.projectSeverity("test-only-import");
@@ -783,6 +867,73 @@ test "import cycle finding and suppression" {
         .rule_id = "import-cycle",
         .key = "a.zig,b.zig",
         .reason = "legacy",
+    });
+    m.applySuppressions();
+    computeDebt(&m);
+
+    try std.testing.expect(m.findings.items[0].suppressed);
+    try std.testing.expectEqual(@as(u32, 0), m.total_debt);
+}
+
+test "call cycle finding and suppression" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    _ = try m.addFile("a.zig", "");
+    try m.fns.append(alloc, .{
+        .name = "f",
+        .file = 0,
+        .line = 1,
+        .end_line = 3,
+        .start = 0,
+        .end = 1,
+        .params = 0,
+        .complexity = 1,
+        .nesting = 0,
+        .loc = 3,
+        .is_pub = false,
+        .has_doc = true,
+    });
+    try m.fns.append(alloc, .{
+        .name = "g",
+        .file = 0,
+        .line = 5,
+        .end_line = 7,
+        .start = 2,
+        .end = 3,
+        .params = 0,
+        .complexity = 1,
+        .nesting = 0,
+        .loc = 3,
+        .is_pub = false,
+        .has_doc = true,
+    });
+    try m.calls.append(alloc, .{ .name = "g", .line = 2, .caller = 0, .resolved = 1 });
+    try m.calls.append(alloc, .{ .name = "f", .line = 6, .caller = 1, .resolved = 0 });
+    try m.fns.items[0].call_sites.append(alloc, 0);
+    try m.fns.items[1].call_sites.append(alloc, 1);
+
+    try findCycles(&m);
+    try addCallCycleFindings(&m);
+
+    try std.testing.expectEqual(@as(usize, 1), m.findings.items.len);
+    const finding = m.findings.items[0];
+    try std.testing.expectEqualStrings("call-cycle", finding.rule_id);
+    try std.testing.expectEqual(model.Severity.warning, finding.severity);
+    try std.testing.expectEqualStrings("a.zig:f,a.zig:g", finding.key.?);
+    try std.testing.expect(std.mem.startsWith(u8, finding.message, "mutual recursion: "));
+
+    try m.config.suppressions.append(alloc, .{
+        .rule_id = "call-cycle",
+        .key = "a.zig:f,a.zig:g",
+        .reason = "bounded parser recursion",
     });
     m.applySuppressions();
     computeDebt(&m);
