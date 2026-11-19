@@ -26,6 +26,7 @@ pub fn parse(model_ptr: *Model, source: []const u8) !void {
     };
 
     if (obj.get("exclude")) |value| try appendStrings(gpa, &model_ptr.config.exclude, value);
+    if (obj.get("test_roots")) |value| try appendStrings(gpa, &model_ptr.config.test_roots, value);
 
     if (obj.get("generated")) |gen_value| {
         switch (gen_value) {
@@ -237,4 +238,19 @@ test "reject invalid project severity" {
     var m = testModel(arena.allocator());
 
     try std.testing.expectError(error.InvalidSeverity, parse(&m, "{\"project_rules\":{\"import-cycle\":\"loud\"}}"));
+}
+
+test "parse test roots and test-only severity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var m = testModel(arena.allocator());
+
+    try parse(&m,
+        \\{"test_roots":["src/unit_tests.zig","customworkflows/generated.zig"],"project_rules":{"test-only-import":"error"}}
+    );
+    try m.validateProjectConfig();
+
+    try std.testing.expectEqual(@as(usize, 2), m.config.test_roots.items.len);
+    try std.testing.expectEqualStrings("src/unit_tests.zig", m.config.test_roots.items[0]);
+    try std.testing.expectEqual(model.Severity.@"error", m.projectSeverity("test-only-import"));
 }

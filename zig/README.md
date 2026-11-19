@@ -160,6 +160,7 @@ Flags:
 {
   "version": 1,
   "exclude": ["vendor/**"],
+  "test_roots": ["src/unit_tests.zig", "src/integration_tests.zig"],
   "generated": {
     "markers": ["@generated"],
     "paths": ["src/proto_gen/**", "customworkflows/**/*_gen.zig"],
@@ -184,7 +185,8 @@ Flags:
     "import-cycle": "warning",
     "call-cycle": "warning",
     "uncalled-private-function": "warning",
-    "architecture": "note"
+    "architecture": "note",
+    "test-only-import": "warning"
   },
   "suppressions": [
     {
@@ -208,16 +210,26 @@ Stable project rule IDs:
 - `call-cycle`
 - `uncalled-private-function`
 - `architecture`
+- `test-only-import`
 
-`import-cycle` is implemented. The other IDs are schema-ready for their rule
-tickets. `project_rules` sets each rule's severity (`error`, `warning`, `note`).
-Unknown IDs are rejected.
+`import-cycle` and `test-only-import` are implemented. The other IDs are
+schema-ready for their rule tickets. `project_rules` sets each rule's severity
+(`error`, `warning`, `note`). Unknown IDs are rejected.
+
+`test-only-import` reports a file-scope aliased `@import` that resolves to a
+local `.zig` file when every alias reference is inside a `test` declaration. It
+skips imports declared inside tests, direct `_ = @import("...")` forms, external
+imports, generated files, and test roots. `test_roots` adds project-specific
+test roots to the built-in `src/unit_tests.zig`, `src/integration_tests.zig`,
+and `customworkflows/generated.zig` defaults; entries accept glob patterns. The
+finding key is `<file>:<alias>`.
 
 `suppressions` entries require `rule`, `key`, and `reason`. The key is the
-stable identity of the finding: sorted cycle members for cycles, or the
-function name for uncalled functions. Unknown rules, missing keys, and missing
-reasons fail config loading before analysis. Suppressed findings stay visible
-in the report with their reason and do not affect `--check` or debt.
+stable identity of the finding: sorted cycle members for cycles, the function
+name for uncalled functions, or `<file>:<alias>` for test-only imports. Unknown
+rules, missing keys, and missing reasons fail config loading before analysis.
+Suppressed findings stay visible in the report with their reason and do not
+affect `--check` or debt.
 
 Precedence: defaults < `zigdepends.json` < CLI flags. Generated detection is
 header-first (`Code generated ... DO NOT EDIT`, `@generated`) and does not
@@ -279,8 +291,9 @@ warning, and 0 per note; `weights` overrides individual rule IDs.
 Function LOC, cyclomatic proxy, nesting, and parameter counts remain visible as
 display-only metrics. They do not create findings or debt.
 
-Import cycles are emitted as `import-cycle` project findings. Call cycles and
-uncalled functions remain report-only until their rule tickets land.
+Import cycles are emitted as `import-cycle` project findings. Test-only imports
+are emitted as `test-only-import` project findings. Call cycles and uncalled
+functions remain report-only until their rule tickets land.
 Self-recursion is normally intentional.
 
 The total is converted to hours and dev-days at 6 productive hours per day.
