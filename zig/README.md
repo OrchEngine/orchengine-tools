@@ -22,8 +22,8 @@ zig build -Doptimize=ReleaseSafe
 Commands:
 
 - `lint` — build/select zlint, run it, and `zig fmt --check`
-- `check` — merge zlint findings with zdepends project findings
-- `verify` — lint, gen-proto, build, test, TSan, generation check, workflow e2e
+- `check` — merge zlint findings with zdepends project findings; artifacts stay in a unique `.tmp/check-*` directory on failure
+- `verify` — check, gen-proto, build, test, TSan, generation check, workflow e2e
 - `e2e`, `generation-check`
 - `coverage`, `coverage-view`, `test-audit`
 - `ui-proof`, `ui-proof-view`
