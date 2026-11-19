@@ -225,7 +225,7 @@ fn runTask(io: Io, arena: std.mem.Allocator, zig_dir: []const u8, name: []const 
 }
 
 fn runNpm(io: Io, arena: std.mem.Allocator, target: []const u8, args: []const []const u8) !void {
-    const editor = try std.fs.path.join(arena, &.{ target, "internal", "editor" });
+    const editor = try std.fs.path.join(arena, &.{ target, "frontend" });
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.append(arena, "npm");
     try argv.appendSlice(arena, args);

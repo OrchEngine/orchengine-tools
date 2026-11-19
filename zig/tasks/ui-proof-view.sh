@@ -9,4 +9,4 @@ if [ ! -d .tmp/ui-proof ]; then
     exit 1
 fi
 
-node internal/editor/ui_test/gallery.mjs .tmp/ui-proof
+node frontend/ui_test/gallery.mjs .tmp/ui-proof
