@@ -470,6 +470,13 @@ fn writeHtml(
         if (model_ptr.import_cycles.items.len == 1) "import cycle" else "import cycles",
     });
     try w.writeAll("<div class=\"card");
+    if (model_ptr.module_cycles.items.len > 0) try w.writeAll(" warn");
+    try w.writeAll("\"><b>");
+    try w.print("{d}</b><span>{s}</span></div>\n", .{
+        model_ptr.module_cycles.items.len,
+        if (model_ptr.module_cycles.items.len == 1) "module cycle" else "module cycles",
+    });
+    try w.writeAll("<div class=\"card");
     if (model_ptr.call_cycles.items.len > 0) try w.writeAll(" warn");
     try w.writeAll("\"><b>");
     try w.print("{d}</b><span>{s}</span></div>\n", .{
@@ -751,7 +758,7 @@ fn writeHtml(
     try writeFindings(model_ptr, w);
 
     // Cycles.
-    try w.writeAll("<section><h2>Circular references</h2>\n<p class=\"muted\">Import cycles usually indicate architectural coupling. Call cycles are recursion; self-recursion is normal, mutual recursion is worth reviewing.</p>\n<div class=\"cols\"><div><h3>Import cycles</h3>\n");
+    try w.writeAll("<section><h2>Circular references</h2>\n<p class=\"muted\">Import cycles usually indicate architectural coupling. Module cycles aggregate imports between top-level facades and are advisory debt, not a hard gate. Call cycles are recursion; self-recursion is normal, mutual recursion is worth reviewing.</p>\n<div class=\"cols\"><div><h3>Import cycles</h3>\n");
     if (model_ptr.import_cycles.items.len == 0) {
         try w.writeAll("<p class=\"muted\">None found.</p>\n");
     } else {
@@ -765,6 +772,25 @@ fn writeHtml(
                 try w.writeAll("</span>");
             }
             try w.writeAll("</div>\n");
+        }
+    }
+    try w.writeAll("<h3>Module cycles</h3>\n");
+    if (model_ptr.module_cycles.items.len == 0) {
+        try w.writeAll("<p class=\"muted\">None found.</p>\n");
+    } else {
+        for (model_ptr.module_cycles.items, 0..) |cycle, i| {
+            try w.writeAll("<div class=\"cycle import\"><strong>Module cycle ");
+            try w.print("{d}</strong> <span class=\"muted\">({d} {s})</span><br>", .{ i + 1, cycle.modules.len, plural(cycle.modules.len, "module", "modules") });
+            for (cycle.modules, 0..) |module_path, j| {
+                if (j != 0) try w.writeAll(", ");
+                try w.writeAll("<span class=\"mono\">");
+                try htmlEscape(w, module_path);
+                try w.writeAll("</span>");
+            }
+            try w.writeAll(" <span class=\"muted mono\">");
+            try htmlEscape(w, cycle.path);
+            if (cycle.line > 0) try w.print(":{d}", .{cycle.line});
+            try w.writeAll("</span></div>\n");
         }
     }
     try w.writeAll("</div><div><h3>Call cycles</h3>\n");

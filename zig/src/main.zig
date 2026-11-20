@@ -318,12 +318,13 @@ pub fn main(init: std.process.Init) !void {
         m.project_debt,
     });
     std.debug.print(
-        "import cycles: {d}  recursion: {d}  debt: {d} min (~{d:.1} h)\n" ++
+        "import cycles: {d}  module cycles: {d}  recursion: {d}  debt: {d} min (~{d:.1} h)\n" ++
             "report: {s}\n" ++
             "dot:    {s}\n" ++
             "dot:    {s}\n",
         .{
             m.import_cycles.items.len,
+            m.module_cycles.items.len,
             m.call_cycles.items.len,
             m.total_debt,
             @as(f64, @floatFromInt(m.total_debt)) / 60.0,

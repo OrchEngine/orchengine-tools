@@ -184,10 +184,12 @@ Flags:
     "note": 0
   },
   "weights": {
-    "max-file-imports": 5
+    "max-file-imports": 5,
+    "module-cycle": 10
   },
   "project_rules": {
     "import-cycle": "warning",
+    "module-cycle": "warning",
     "call-cycle": "warning",
     "uncalled-private-function": "warning",
     "architecture": "note",
@@ -212,14 +214,21 @@ severities, and suppressions.
 Stable project rule IDs:
 
 - `import-cycle`
+- `module-cycle`
 - `call-cycle`
 - `uncalled-private-function`
 - `architecture`
 - `test-only-import`
 
-`import-cycle` and `test-only-import` are implemented. The other IDs are
-schema-ready for their rule tickets. `project_rules` sets each rule's severity
-(`error`, `warning`, `note`). Unknown IDs are rejected.
+`import-cycle`, `module-cycle`, and `test-only-import` are implemented. The
+other IDs are schema-ready for their rule tickets. `project_rules` sets each
+rule's severity (`error`, `warning`, `note`). Unknown IDs are rejected.
+
+`module-cycle` aggregates resolved imports between top-level facades/modules and
+reports SCC cycles such as `editor, workflowlower`. It is advisory by default:
+use `"warning"` plus a weight to add debt without failing `--check`. Root files,
+generated files, and files hidden by `graph.exclude` do not participate. The
+suppression key is the sorted module list, for example `editor,workflowlower`.
 
 `test-only-import` reports a file-scope aliased `@import` that resolves to a
 local `.zig` file when every alias reference is inside a `test` declaration. It
@@ -312,10 +321,11 @@ warning, and 0 per note; `weights` overrides individual rule IDs.
 Function LOC, cyclomatic proxy, nesting, and parameter counts remain visible as
 display-only metrics. They do not create findings or debt.
 
-Import cycles are emitted as `import-cycle` project findings. Test-only imports
-are emitted as `test-only-import` project findings. Call cycles and uncalled
-functions remain report-only until their rule tickets land.
-Self-recursion is normally intentional.
+Import cycles are emitted as `import-cycle` project findings. Module cycles are
+emitted as `module-cycle` project findings; they are advisory by default and add
+the configured weight to debt. Test-only imports are emitted as
+`test-only-import` project findings. Call cycles are emitted as `call-cycle`
+findings and support the same severities, weights, and suppressions.
 
 The total is converted to hours and dev-days at 6 productive hours per day.
 These are configurable estimates, not measurements.
@@ -335,6 +345,8 @@ These are configurable estimates, not measurements.
   within each rank to reduce crossings. That is best-effort: crossings remain
   possible, and feedback edges are kept visible. `Reset` restores the original
   Graphviz positions.
+- `module-cycle` aggregates to top-level modules only. Nested submodule cycles
+  are visible in the graph but are not reported as separate findings.
 - Import cycles are legal in Zig (`@import` is lazy); the report highlights
   them as architectural coupling, not as compiler errors.
 - Capability detection is heuristic: allocator/Io stored in a struct field is

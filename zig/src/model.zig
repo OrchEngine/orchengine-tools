@@ -37,6 +37,7 @@ pub const Suppression = struct {
 
 pub const project_rule_ids = [_][]const u8{
     "import-cycle",
+    "module-cycle",
     "call-cycle",
     "uncalled-private-function",
     "architecture",
@@ -232,6 +233,14 @@ pub const Cycle = struct {
     nodes: []u32,
 };
 
+pub const ModuleCycle = struct {
+    /// Sorted module paths. A module is a top-level facade group.
+    modules: []const []const u8,
+    /// Representative file and import line for the finding location.
+    path: []const u8,
+    line: u32 = 0,
+};
+
 pub const Chain = struct {
     root: u32,
     nodes: []u32,
@@ -256,6 +265,7 @@ pub const Model = struct {
     global_fn: std.StringHashMapUnmanaged(u32) = .empty,
     module_imports: std.ArrayList(ModuleImport) = .empty,
     import_cycles: std.ArrayList(Cycle) = .empty,
+    module_cycles: std.ArrayList(ModuleCycle) = .empty,
     call_cycles: std.ArrayList(Cycle) = .empty,
     chains: std.ArrayList(Chain) = .empty,
     unresolved_calls: u32 = 0,
