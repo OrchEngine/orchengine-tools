@@ -4,6 +4,7 @@
 //! Self-recursion (`next: ?*Node`) is ignored. Off by default.
 
 const std = @import("std");
+const mem = std.mem;
 const zlint = @import("zlint");
 
 const Rule = zlint.linter.rule.Rule;
@@ -33,7 +34,7 @@ fn isContainer(tag: Ast.Node.Tag) bool {
 
 fn containsWord(haystack: []const u8, needle: []const u8) bool {
     var i: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, i, needle)) |at| {
+    while (mem.findPos(u8, haystack, i, needle)) |at| {
         const before_ok = at == 0 or !std.ascii.isAlphanumeric(haystack[at - 1]) and haystack[at - 1] != '_';
         const end = at + needle.len;
         const after_ok = end == haystack.len or !std.ascii.isAlphanumeric(haystack[end]) and haystack[end] != '_';
@@ -45,7 +46,7 @@ fn containsWord(haystack: []const u8, needle: []const u8) bool {
 
 fn findType(types: []const Type, name: []const u8) ?u32 {
     for (types, 0..) |t, i| {
-        if (std.mem.eql(u8, t.name, name)) return @intCast(i);
+        if (mem.eql(u8, t.name, name)) return @intCast(i);
     }
     return null;
 }

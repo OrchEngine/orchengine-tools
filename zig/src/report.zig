@@ -1,4 +1,5 @@
 const std = @import("std");
+const mem = std.mem;
 const Io = std.Io;
 const model = @import("model.zig");
 const graph = @import("graph.zig");
@@ -30,13 +31,13 @@ pub fn write(
     const gpa = model_ptr.gpa;
     try Io.Dir.cwd().createDirPath(io, out_dir);
 
-    const html_path = try std.fs.path.join(gpa, &.{ out_dir, "report.html" });
-    const imports_dot = try std.fs.path.join(gpa, &.{ out_dir, "imports.dot" });
-    const imports_svg = try std.fs.path.join(gpa, &.{ out_dir, "imports.svg" });
-    const calls_dot = try std.fs.path.join(gpa, &.{ out_dir, "calls.dot" });
-    const calls_svg = try std.fs.path.join(gpa, &.{ out_dir, "calls.svg" });
-    const fields_dot = try std.fs.path.join(gpa, &.{ out_dir, "fields.dot" });
-    const fields_svg = try std.fs.path.join(gpa, &.{ out_dir, "fields.svg" });
+    const html_path = try std.Io.Dir.path.join(gpa, &.{ out_dir, "report.html" });
+    const imports_dot = try std.Io.Dir.path.join(gpa, &.{ out_dir, "imports.dot" });
+    const imports_svg = try std.Io.Dir.path.join(gpa, &.{ out_dir, "imports.svg" });
+    const calls_dot = try std.Io.Dir.path.join(gpa, &.{ out_dir, "calls.dot" });
+    const calls_svg = try std.Io.Dir.path.join(gpa, &.{ out_dir, "calls.svg" });
+    const fields_dot = try std.Io.Dir.path.join(gpa, &.{ out_dir, "fields.dot" });
+    const fields_svg = try std.Io.Dir.path.join(gpa, &.{ out_dir, "fields.svg" });
 
     var hierarchy = try graph.build(model_ptr);
     defer hierarchy.deinit();
@@ -147,7 +148,7 @@ fn writeCallDot(model_ptr: *Model, io: Io, path: []const u8) !void {
     // Add highest-debt functions until the cap.
     var order = try gpa.alloc(u32, nfns);
     for (0..nfns) |i| order[i] = @intCast(i);
-    std.mem.sort(u32, order, model_ptr, lessDebt);
+    mem.sort(u32, order, model_ptr, lessDebt);
     var count: usize = 0;
     for (selected) |s| {
         if (s) count += 1;
@@ -161,7 +162,7 @@ fn writeCallDot(model_ptr: *Model, io: Io, path: []const u8) !void {
 
     for (model_ptr.fns.items, 0..) |f, i| {
         if (!selected[i]) continue;
-        const label = try std.fmt.allocPrint(gpa, "{s}\n{s}:{d}", .{
+        const label = try gpa.print("{s}\n{s}:{d}", .{
             f.name,
             model_ptr.fileLabel(f.file),
             f.line,
@@ -187,7 +188,7 @@ fn writeCallDot(model_ptr: *Model, io: Io, path: []const u8) !void {
         if (!selected[caller] or !selected[callee]) continue;
         const caller_fn = model_ptr.fns.items[caller];
         try w.print("  fn{d} -> fn{d} [tooltip=", .{ caller, callee });
-        const tip = try std.fmt.allocPrint(gpa, "{s}:{d}", .{ model_ptr.fileLabel(caller_fn.file), call.line });
+        const tip = try gpa.print("{s}:{d}", .{ model_ptr.fileLabel(caller_fn.file), call.line });
         try dotStr(w, tip);
         if (caller_fn.cycle_id != null and caller_fn.cycle_id == model_ptr.fns.items[callee].cycle_id) {
             try w.writeAll(", color=\"#d93025\", penwidth=1.6");
@@ -234,7 +235,7 @@ fn writeFieldDot(model_ptr: *Model, io: Io, path: []const u8) !void {
         } else {
             try w.writeAll("\"#eef2f7\", color=\"#8c959f\"");
         }
-        const label = try std.fmt.allocPrint(gpa, "{s}\n{d} fields", .{ t.name, t.fields.items.len });
+        const label = try gpa.print("{s}\n{d} fields", .{ t.name, t.fields.items.len });
         try w.writeAll(", label=");
         try dotStr(w, label);
         try w.writeAll(", tooltip=");
@@ -244,7 +245,7 @@ fn writeFieldDot(model_ptr: *Model, io: Io, path: []const u8) !void {
 
     for (model_ptr.fns.items, 0..) |f, fn_idx| {
         if (!fn_used[fn_idx]) continue;
-        const label = try std.fmt.allocPrint(gpa, "{s}\n{s}:{d}", .{ f.name, model_ptr.fileLabel(f.file), f.line });
+        const label = try gpa.print("{s}\n{s}:{d}", .{ f.name, model_ptr.fileLabel(f.file), f.line });
         try w.print("  fn{d} [fillcolor=\"#f3e8fd\", color=\"#8250df\", label=", .{fn_idx});
         try dotStr(w, label);
         try w.writeAll(", tooltip=");
@@ -255,7 +256,7 @@ fn writeFieldDot(model_ptr: *Model, io: Io, path: []const u8) !void {
     var seen: std.StringHashMapUnmanaged(void) = .empty;
     defer seen.deinit(gpa);
     for (model_ptr.field_accesses.items) |access| {
-        const key = try std.fmt.allocPrint(gpa, "{d}:{d}:{d}:{d}", .{
+        const key = try gpa.print("{d}:{d}:{d}:{d}", .{
             access.fn_idx,
             access.type_id,
             access.field_id,
@@ -267,9 +268,9 @@ fn writeFieldDot(model_ptr: *Model, io: Io, path: []const u8) !void {
         const field = model_ptr.fields.items[access.field_id];
         const fn_info = model_ptr.fns.items[access.fn_idx];
         const label = switch (access.kind) {
-            .read => try std.fmt.allocPrint(gpa, "read {s}", .{field.name}),
-            .write => try std.fmt.allocPrint(gpa, "write {s}", .{field.name}),
-            .read_write => try std.fmt.allocPrint(gpa, "read+write {s}", .{field.name}),
+            .read => try gpa.print("read {s}", .{field.name}),
+            .write => try gpa.print("write {s}", .{field.name}),
+            .read_write => try gpa.print("read+write {s}", .{field.name}),
         };
         try w.print("  fn{d} -> ty{d} [label=", .{ access.fn_idx, access.type_id });
         try dotStr(w, label);
@@ -280,7 +281,7 @@ fn writeFieldDot(model_ptr: *Model, io: Io, path: []const u8) !void {
             .read_write => "\"#8250df\"",
         });
         try w.writeAll(", tooltip=");
-        const tip = try std.fmt.allocPrint(gpa, "{s}:{d}", .{ model_ptr.fileLabel(fn_info.file), access.line });
+        const tip = try gpa.print("{s}:{d}", .{ model_ptr.fileLabel(fn_info.file), access.line });
         try dotStr(w, tip);
         try w.writeAll("];\n");
     }
@@ -565,7 +566,7 @@ fn writeHtml(
         try w.writeAll("<h3>Functions with requirements</h3>\n<div class=\"table-wrap\"><table><thead><tr><th>Function</th><th>Location</th><th>Allocator</th><th>Io</th><th>Source</th></tr></thead><tbody>\n");
         var cap_order = try model_ptr.gpa.alloc(u32, model_ptr.fns.items.len);
         for (0..cap_order.len) |idx| cap_order[idx] = @intCast(idx);
-        std.mem.sort(u32, cap_order, model_ptr, lessDebt);
+        mem.sort(u32, cap_order, model_ptr, lessDebt);
         var cap_shown: usize = 0;
         for (cap_order) |fn_idx| {
             const f = model_ptr.fns.items[fn_idx];
@@ -687,7 +688,7 @@ fn writeHtml(
         // Top fields.
         var field_order = try model_ptr.gpa.alloc(u32, model_ptr.fields.items.len);
         for (0..field_order.len) |i| field_order[i] = @intCast(i);
-        std.mem.sort(u32, field_order, model_ptr, lessFieldActivity);
+        mem.sort(u32, field_order, model_ptr, lessFieldActivity);
         try w.writeAll("<h3>Most accessed fields</h3><div class=\"table-wrap\"><table><thead><tr><th>Field</th><th>Type</th><th data-sort=\"num\">Reads</th><th data-sort=\"num\">Writes</th><th>Shape</th></tr></thead><tbody>\n");
         var field_shown: usize = 0;
         for (field_order) |field_id| {
@@ -726,7 +727,7 @@ fn writeHtml(
 
     var order = try model_ptr.gpa.alloc(u32, model_ptr.fns.items.len);
     for (0..order.len) |i| order[i] = @intCast(i);
-    std.mem.sort(u32, order, model_ptr, lessDebt);
+    mem.sort(u32, order, model_ptr, lessDebt);
     var shown: usize = 0;
     for (order) |fn_idx| {
         const f = model_ptr.fns.items[fn_idx];
@@ -882,7 +883,7 @@ fn writeHtml(
     try w.writeAll("<section><h2>Files</h2>\n<table><thead><tr><th>File</th><th data-sort=\"num\">Functions</th><th data-sort=\"num\">Debt</th><th data-sort=\"num\">Imports</th></tr></thead><tbody>\n");
     var file_order = try model_ptr.gpa.alloc(u32, model_ptr.files.items.len);
     for (0..file_order.len) |i| file_order[i] = @intCast(i);
-    std.mem.sort(u32, file_order, model_ptr, lessFileDebt);
+    mem.sort(u32, file_order, model_ptr, lessFileDebt);
     for (file_order) |file_idx| {
         const file = model_ptr.files.items[file_idx];
         if (file.generated and !model_ptr.config.include_generated_metrics) continue;
@@ -1204,7 +1205,7 @@ fn embedSvg(w: *std.Io.Writer, io: Io, path: []const u8) !void {
     ) catch return;
     defer std.heap.page_allocator.free(data);
     var start: usize = 0;
-    if (std.mem.indexOf(u8, data, "<svg")) |idx| start = idx;
-    const end = std.mem.lastIndexOf(u8, data, "</svg>") orelse return;
+    if (mem.find(u8, data, "<svg")) |idx| start = idx;
+    const end = mem.findLast(u8, data, "</svg>") orelse return;
     try w.writeAll(data[start .. end + 6]);
 }

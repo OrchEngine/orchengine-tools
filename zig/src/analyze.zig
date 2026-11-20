@@ -1,4 +1,6 @@
 const std = @import("std");
+const mem = std.mem;
+const Allocator = mem.Allocator;
 const model = @import("model.zig");
 const graph = @import("graph.zig");
 
@@ -88,7 +90,7 @@ fn buildIndices(model_ptr: *Model) !void {
                 continue;
             }
 
-            if (std.mem.eql(u8, recv, "self")) {
+            if (mem.eql(u8, recv, "self")) {
                 if (caller_info.parent) |parent| {
                     if (findMethod(model_ptr, caller_file, parent, call.name)) |fn_idx| {
                         found = fn_idx;
@@ -136,9 +138,9 @@ fn buildIndices(model_ptr: *Model) !void {
 }
 
 fn isExternalReceiver(recv: []const u8) bool {
-    if (std.mem.eql(u8, recv, "std") or std.mem.eql(u8, recv, "builtin")) return true;
-    if (std.mem.startsWith(u8, recv, "std.")) return true;
-    if (std.mem.startsWith(u8, recv, "@")) return true;
+    if (mem.eql(u8, recv, "std") or mem.eql(u8, recv, "builtin")) return true;
+    if (mem.startsWith(u8, recv, "std.")) return true;
+    if (mem.startsWith(u8, recv, "@")) return true;
     return false;
 }
 
@@ -154,8 +156,8 @@ fn findMethod(model_ptr: *Model, file_idx: u32, type_name: []const u8, fn_name: 
     for (model_ptr.files.items[file_idx].fns.items) |fn_idx| {
         const f = model_ptr.fns.items[fn_idx];
         const parent = f.parent orelse continue;
-        if (!std.mem.eql(u8, parent, type_name)) continue;
-        if (!std.mem.eql(u8, f.name, fn_name)) continue;
+        if (!mem.eql(u8, parent, type_name)) continue;
+        if (!mem.eql(u8, f.name, fn_name)) continue;
         if (found != null) return null;
         found = fn_idx;
     }
@@ -495,17 +497,17 @@ fn callCycleHasGenerated(model_ptr: *Model, cycle: model.Cycle) bool {
 
 fn sortedCallCycleMembers(model_ptr: *Model, cycle: model.Cycle) ![]u32 {
     const members = try model_ptr.gpa.dupe(u32, cycle.nodes);
-    std.mem.sort(u32, members, model_ptr, struct {
+    mem.sort(u32, members, model_ptr, struct {
         fn less(m: *Model, a: u32, b: u32) bool {
             const fa = m.fns.items[a];
             const fb = m.fns.items[b];
             const la = m.fileLabel(fa.file);
             const lb = m.fileLabel(fb.file);
-            const file_order = std.mem.order(u8, la, lb);
+            const file_order = mem.order(u8, la, lb);
             if (file_order != .eq) return file_order == .lt;
             const na = fnDisplayName(m, a);
             const nb = fnDisplayName(m, b);
-            return std.mem.lessThan(u8, na, nb);
+            return mem.lessThan(u8, na, nb);
         }
     }.less);
     return members;
@@ -514,7 +516,7 @@ fn sortedCallCycleMembers(model_ptr: *Model, cycle: model.Cycle) ![]u32 {
 fn fnDisplayName(model_ptr: *Model, fn_idx: u32) []const u8 {
     const f = model_ptr.fns.items[fn_idx];
     if (f.parent) |parent| {
-        return std.fmt.allocPrint(model_ptr.gpa, "{s}.{s}", .{ parent, f.name }) catch f.name;
+        return model_ptr.gpa.print("{s}.{s}", .{ parent, f.name }) catch f.name;
     }
     return f.name;
 }
@@ -553,7 +555,7 @@ fn addUncalledPrivateFindings(model_ptr: *Model) !void {
         for (file.fns.items) |fn_idx| {
             const f = model_ptr.fns.items[fn_idx];
             if (f.is_pub or f.parent != null or f.name.len == 0) continue;
-            if (std.mem.eql(u8, f.name, "main")) continue;
+            if (mem.eql(u8, f.name, "main")) continue;
             const decl = file.source[f.start..f.end];
             if (declarationIsExported(decl)) continue;
             if (countNameMentions(model_ptr, f.name) > 1) continue;
@@ -561,13 +563,13 @@ fn addUncalledPrivateFindings(model_ptr: *Model) !void {
             try model_ptr.findings.append(gpa, .{
                 .rule_id = "uncalled-private-function",
                 .severity = severity,
-                .message = try std.fmt.allocPrint(gpa, "private function '{s}' is not referenced", .{f.name}),
+                .message = try gpa.print("private function '{s}' is not referenced", .{f.name}),
                 .path = model_ptr.fileLabel(@intCast(file_idx)),
                 .line = f.line,
                 .end_line = f.end_line,
                 .source = .project,
                 .weight = model_ptr.findingWeight("uncalled-private-function", severity),
-                .key = try std.fmt.allocPrint(gpa, "{s}:{s}", .{
+                .key = try gpa.print("{s}:{s}", .{
                     model_ptr.fileLabel(@intCast(file_idx)),
                     f.name,
                 }),
@@ -578,8 +580,8 @@ fn addUncalledPrivateFindings(model_ptr: *Model) !void {
 
 fn declarationIsExported(decl: []const u8) bool {
     const head = decl[0..@min(decl.len, 32)];
-    return std.mem.indexOf(u8, head, "export") != null or
-        std.mem.indexOf(u8, head, "extern") != null;
+    return mem.find(u8, head, "export") != null or
+        mem.find(u8, head, "extern") != null;
 }
 
 fn countNameMentions(model_ptr: *Model, name: []const u8) u32 {
@@ -605,7 +607,7 @@ fn addTestOnlyImportFindings(model_ptr: *Model) !void {
             try model_ptr.findings.append(gpa, .{
                 .rule_id = "test-only-import",
                 .severity = severity,
-                .message = try std.fmt.allocPrint(gpa, "import '{s}' from \"{s}\" is only used by tests", .{
+                .message = try gpa.print("import '{s}' from \"{s}\" is only used by tests", .{
                     alias,
                     imp.raw,
                 }),
@@ -613,7 +615,7 @@ fn addTestOnlyImportFindings(model_ptr: *Model) !void {
                 .line = imp.line,
                 .source = .project,
                 .weight = model_ptr.findingWeight("test-only-import", severity),
-                .key = try std.fmt.allocPrint(gpa, "{s}:{s}", .{ label, alias }),
+                .key = try gpa.print("{s}:{s}", .{ label, alias }),
             });
         }
     }
@@ -630,9 +632,9 @@ fn cycleKey(model_ptr: *Model, cycle: model.Cycle) ![]const u8 {
     const gpa = model_ptr.gpa;
     const labels = try gpa.alloc([]const u8, cycle.nodes.len);
     for (cycle.nodes, 0..) |file_idx, i| labels[i] = model_ptr.fileLabel(file_idx);
-    std.mem.sort([]const u8, labels, {}, struct {
+    mem.sort([]const u8, labels, {}, struct {
         fn less(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
+            return mem.lessThan(u8, a, b);
         }
     }.less);
 
@@ -759,7 +761,7 @@ fn computeChains(model_ptr: *Model) !void {
     defer roots.deinit(gpa);
 
     for (model_ptr.fns.items, 0..) |f, i| {
-        if (std.mem.eql(u8, f.name, "main")) try roots.append(gpa, @intCast(i));
+        if (mem.eql(u8, f.name, "main")) try roots.append(gpa, @intCast(i));
     }
 
     if (roots.items.len == 0) {
@@ -790,7 +792,7 @@ fn computeChains(model_ptr: *Model) !void {
         }
     }
 
-    std.mem.sort(model.Chain, model_ptr.chains.items, {}, struct {
+    mem.sort(model.Chain, model_ptr.chains.items, {}, struct {
         fn less(_: void, a: model.Chain, b: model.Chain) bool {
             return a.nodes.len > b.nodes.len;
         }
@@ -846,7 +848,7 @@ test "capabilities propagate to callers" {
     try std.testing.expect(!m.fns.items[1].needs_io);
 }
 
-fn testModel(alloc: std.mem.Allocator) !Model {
+fn testModel(alloc: Allocator) !Model {
     var m = Model{
         .gpa = alloc,
         .root = ".",
@@ -1067,7 +1069,7 @@ test "call cycle finding and suppression" {
     try std.testing.expectEqualStrings("call-cycle", finding.rule_id);
     try std.testing.expectEqual(model.Severity.warning, finding.severity);
     try std.testing.expectEqualStrings("a.zig:f,a.zig:g", finding.key.?);
-    try std.testing.expect(std.mem.startsWith(u8, finding.message, "mutual recursion: "));
+    try std.testing.expect(mem.startsWith(u8, finding.message, "mutual recursion: "));
 
     try m.config.suppressions.append(alloc, .{
         .rule_id = "call-cycle",
@@ -1094,8 +1096,8 @@ test "uncalled private function finding and suppression" {
     };
     const source = "fn unused() void {}\nfn used() void {}\ntest { used(); }\n";
     const file = try m.addFile("a.zig", source);
-    const unused_start = std.mem.indexOf(u8, source, "fn unused").?;
-    const used_start = std.mem.indexOf(u8, source, "fn used").?;
+    const unused_start = mem.find(u8, source, "fn unused").?;
+    const used_start = mem.find(u8, source, "fn used").?;
     try m.fns.append(alloc, .{
         .name = "unused",
         .file = file,
@@ -1176,7 +1178,7 @@ test "test-only import finding and suppression" {
     try std.testing.expectEqualStrings("a.zig", finding.path);
     try std.testing.expectEqual(@as(u32, 2), finding.line);
     try std.testing.expectEqualStrings("a.zig:helper", finding.key.?);
-    try std.testing.expect(std.mem.indexOf(u8, finding.message, "only used by tests") != null);
+    try std.testing.expect(mem.find(u8, finding.message, "only used by tests") != null);
 
     try m.config.suppressions.append(alloc, .{
         .rule_id = "test-only-import",

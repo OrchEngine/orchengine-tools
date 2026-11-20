@@ -1,7 +1,9 @@
 const std = @import("std");
+const mem = std.mem;
+const Allocator = mem.Allocator;
 const Ast = std.zig.Ast;
 
-pub const Gpa = std.mem.Allocator;
+pub const Gpa = Allocator;
 pub const no_fn = std.math.maxInt(u32);
 
 pub const Severity = enum {
@@ -295,7 +297,7 @@ pub const Model = struct {
         const id: u32 = @intCast(self.files.items.len);
         try self.files.append(self.gpa, .{
             .path = path,
-            .dir = std.fs.path.dirname(path) orelse ".",
+            .dir = std.Io.Dir.path.dirname(path) orelse ".",
             .source = source,
         });
         try self.file_by_path.put(self.gpa, path, id);
@@ -304,9 +306,9 @@ pub const Model = struct {
 
     pub fn fileLabel(self: *const Model, file_idx: u32) []const u8 {
         const path = self.files.items[file_idx].path;
-        if (std.mem.eql(u8, path, self.root)) return std.fs.path.basename(path);
-        if (std.mem.startsWith(u8, path, self.root)) {
-            if (path.len > self.root.len and path[self.root.len] == std.fs.path.sep) {
+        if (mem.eql(u8, path, self.root)) return std.Io.Dir.path.basename(path);
+        if (mem.startsWith(u8, path, self.root)) {
+            if (path.len > self.root.len and path[self.root.len] == std.Io.Dir.path.sep) {
                 return path[self.root.len + 1 ..];
             }
         }
@@ -315,7 +317,7 @@ pub const Model = struct {
 
     pub fn fileIndexByPath(self: *const Model, path: []const u8) ?u32 {
         if (self.file_by_path.get(path)) |file_idx| return file_idx;
-        const resolved = std.fs.path.resolve(self.gpa, &.{ self.root, path }) catch return null;
+        const resolved = std.Io.Dir.path.resolveAlloc(self.gpa, &.{ self.root, path }) catch return null;
         return self.file_by_path.get(resolved);
     }
 
@@ -339,9 +341,9 @@ pub const Model = struct {
         for (default_test_roots) |root| {
             if (pathMatches(root, rel_path)) return true;
         }
-        const basename = std.fs.path.basename(rel_path);
-        return std.mem.eql(u8, basename, "unit_tests.zig") or
-            std.mem.eql(u8, basename, "integration_tests.zig");
+        const basename = std.Io.Dir.path.basename(rel_path);
+        return mem.eql(u8, basename, "unit_tests.zig") or
+            mem.eql(u8, basename, "integration_tests.zig");
     }
 
     pub fn validateProjectConfig(self: *const Model) !void {
@@ -361,8 +363,8 @@ pub const Model = struct {
             if (finding.source != .project) continue;
             const key = finding.key orelse continue;
             for (self.config.suppressions.items) |suppression| {
-                if (!std.mem.eql(u8, suppression.rule_id, finding.rule_id)) continue;
-                if (!std.mem.eql(u8, suppression.key, key)) continue;
+                if (!mem.eql(u8, suppression.rule_id, finding.rule_id)) continue;
+                if (!mem.eql(u8, suppression.key, key)) continue;
                 finding.suppressed = true;
                 finding.suppression_reason = suppression.reason;
                 break;
@@ -372,7 +374,7 @@ pub const Model = struct {
 
     pub fn fnLabel(self: *const Model, fn_idx: u32) []const u8 {
         const f = self.fns.items[fn_idx];
-        return std.fmt.allocPrint(self.gpa, "{s}:{d} {s}", .{
+        return self.gpa.print("{s}:{d} {s}", .{
             self.fileLabel(f.file),
             f.line,
             f.name,
@@ -385,18 +387,18 @@ pub const Model = struct {
     }
 
     pub fn resolveImportPath(self: *Model, from: u32, raw: []const u8) ?[]const u8 {
-        if (std.mem.eql(u8, raw, "std") or
-            std.mem.eql(u8, raw, "builtin") or
-            std.mem.eql(u8, raw, "root")) return null;
-        if (!std.mem.endsWith(u8, raw, ".zig")) return null;
+        if (mem.eql(u8, raw, "std") or
+            mem.eql(u8, raw, "builtin") or
+            mem.eql(u8, raw, "root")) return null;
+        if (!mem.endsWith(u8, raw, ".zig")) return null;
         const f = self.files.items[from];
-        return std.fs.path.resolve(self.gpa, &.{ f.dir, raw }) catch null;
+        return std.Io.Dir.path.resolveAlloc(self.gpa, &.{ f.dir, raw }) catch null;
     }
 
     pub fn isExternalImport(raw: []const u8) bool {
-        return std.mem.eql(u8, raw, "std") or
-            std.mem.eql(u8, raw, "builtin") or
-            std.mem.eql(u8, raw, "root");
+        return mem.eql(u8, raw, "std") or
+            mem.eql(u8, raw, "builtin") or
+            mem.eql(u8, raw, "root");
     }
 
     pub fn graphExcludes(self: *const Model, rel_path: []const u8) bool {
@@ -409,7 +411,7 @@ pub const Model = struct {
 
 pub fn isProjectRule(rule_id: []const u8) bool {
     inline for (project_rule_ids) |id| {
-        if (std.mem.eql(u8, rule_id, id)) return true;
+        if (mem.eql(u8, rule_id, id)) return true;
     }
     return false;
 }
@@ -417,7 +419,7 @@ pub fn isProjectRule(rule_id: []const u8) bool {
 pub fn countOccurrences(haystack: []const u8, needle: []const u8) u32 {
     var n: u32 = 0;
     var i: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, i, needle)) |found| {
+    while (mem.findPos(u8, haystack, i, needle)) |found| {
         n += 1;
         i = found + needle.len;
     }
@@ -442,10 +444,10 @@ pub fn tokenTextRange(ast: *const Ast, node: Ast.Node.Index, src: []const u8) []
 pub fn pathMatches(pattern_raw: []const u8, path_raw: []const u8) bool {
     const pattern = stripDotSlash(pattern_raw);
     const path = stripDotSlash(path_raw);
-    if (std.mem.indexOfAny(u8, pattern, "*?") == null) {
-        if (std.mem.eql(u8, pattern, path)) return true;
+    if (mem.findAny(u8, pattern, "*?") == null) {
+        if (mem.eql(u8, pattern, path)) return true;
         if (path.len > pattern.len and
-            std.mem.startsWith(u8, path, pattern) and
+            mem.startsWith(u8, path, pattern) and
             path[pattern.len] == '/') return true;
         return false;
     }
@@ -454,7 +456,7 @@ pub fn pathMatches(pattern_raw: []const u8, path_raw: []const u8) bool {
 
 fn stripDotSlash(s: []const u8) []const u8 {
     var out = s;
-    while (std.mem.startsWith(u8, out, "./")) out = out[2..];
+    while (mem.startsWith(u8, out, "./")) out = out[2..];
     return out;
 }
 

@@ -1,4 +1,6 @@
 const std = @import("std");
+const mem = std.mem;
+const Allocator = mem.Allocator;
 const model = @import("model.zig");
 
 const Model = model.Model;
@@ -88,7 +90,7 @@ fn writeJson(model_ptr: *Model, w: *std.Io.Writer) !void {
     try w.writeAll("\n");
 }
 
-fn testModel(alloc: std.mem.Allocator) Model {
+fn testModel(alloc: Allocator) Model {
     return .{
         .gpa = alloc,
         .root = ".",
@@ -116,7 +118,7 @@ test "check text output and warning exit" {
     const failed = try write(&m, &aw.writer, .text);
 
     try std.testing.expect(!failed);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "a.zig:2: warning [test-rule] msg") != null);
+    try std.testing.expect(mem.find(u8, aw.written(), "a.zig:2: warning [test-rule] msg") != null);
 }
 
 test "check json output and error exit" {
@@ -138,9 +140,9 @@ test "check json output and error exit" {
     const failed = try write(&m, &aw.writer, .json);
 
     try std.testing.expect(failed);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\"rule_id\":\"test-rule\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\"severity\":\"error\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\"source\":\"project\"") != null);
+    try std.testing.expect(mem.find(u8, aw.written(), "\"rule_id\":\"test-rule\"") != null);
+    try std.testing.expect(mem.find(u8, aw.written(), "\"severity\":\"error\"") != null);
+    try std.testing.expect(mem.find(u8, aw.written(), "\"source\":\"project\"") != null);
 }
 
 test "suppressed errors do not fail check" {
@@ -164,5 +166,5 @@ test "suppressed errors do not fail check" {
     const failed = try write(&m, &aw.writer, .text);
 
     try std.testing.expect(!failed);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "suppressed: accepted") != null);
+    try std.testing.expect(mem.find(u8, aw.written(), "suppressed: accepted") != null);
 }

@@ -4,6 +4,7 @@
 //! lines outside `test` blocks. Advisory; off by default.
 
 const std = @import("std");
+const mem = std.mem;
 const zlint = @import("zlint");
 
 const Rule = zlint.linter.rule.Rule;
@@ -35,7 +36,7 @@ pub fn runOnce(self: *const ProductionFileSize, ctx: *LinterContext) void {
 
     var prod_lines: u32 = 0;
     var offset: u32 = 0;
-    var lines = std.mem.splitScalar(u8, source, '\n');
+    var lines = mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
         const line_start = offset;
         const line_end = offset + @as(u32, @intCast(line.len));
@@ -50,9 +51,9 @@ pub fn runOnce(self: *const ProductionFileSize, ctx: *LinterContext) void {
         }
         if (in_test) continue;
 
-        const trimmed = std.mem.trim(u8, line, " \t\r");
+        const trimmed = mem.trim(u8, line, " \t\r");
         if (trimmed.len == 0) continue;
-        if (std.mem.startsWith(u8, trimmed, "//")) continue;
+        if (mem.startsWith(u8, trimmed, "//")) continue;
         prod_lines += 1;
     }
 

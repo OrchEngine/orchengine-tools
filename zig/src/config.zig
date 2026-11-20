@@ -1,4 +1,6 @@
 const std = @import("std");
+const mem = std.mem;
+const Allocator = mem.Allocator;
 const Io = std.Io;
 const model = @import("model.zig");
 
@@ -45,7 +47,7 @@ pub fn parse(model_ptr: *Model, source: []const u8) !void {
                 if (gen.get("include_in_metrics")) |v| {
                     switch (v) {
                         .bool => |b| model_ptr.config.include_generated_metrics = b,
-                        .string => |s| model_ptr.config.include_generated_metrics = std.mem.eql(u8, s, "true"),
+                        .string => |s| model_ptr.config.include_generated_metrics = mem.eql(u8, s, "true"),
                         else => {},
                     }
                 }
@@ -159,9 +161,9 @@ fn severityOf(value: std.json.Value) ?model.Severity {
         .string => |text| text,
         else => return null,
     };
-    if (std.mem.eql(u8, s, "error")) return .@"error";
-    if (std.mem.eql(u8, s, "warning") or std.mem.eql(u8, s, "warn")) return .warning;
-    if (std.mem.eql(u8, s, "note") or std.mem.eql(u8, s, "info")) return .note;
+    if (mem.eql(u8, s, "error")) return .@"error";
+    if (mem.eql(u8, s, "warning") or mem.eql(u8, s, "warn")) return .warning;
+    if (mem.eql(u8, s, "note") or mem.eql(u8, s, "info")) return .note;
     return null;
 }
 
@@ -189,7 +191,7 @@ fn asU32(value: ?std.json.Value) ?u32 {
     };
 }
 
-fn testModel(alloc: std.mem.Allocator) Model {
+fn testModel(alloc: Allocator) Model {
     return .{
         .gpa = alloc,
         .root = ".",

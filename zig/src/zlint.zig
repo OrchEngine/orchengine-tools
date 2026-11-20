@@ -1,4 +1,5 @@
 const std = @import("std");
+const mem = std.mem;
 const model = @import("model.zig");
 
 const Model = model.Model;
@@ -14,9 +15,9 @@ pub fn load(model_ptr: *Model, io: std.Io, path: []const u8) !void {
         0,
     );
 
-    var lines = std.mem.splitScalar(u8, source, '\n');
+    var lines = mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
+        const trimmed = mem.trim(u8, line, " \t\r");
         if (trimmed.len == 0) continue;
         try parseLine(model_ptr, trimmed);
     }
@@ -58,8 +59,8 @@ fn stringOf(value: ?std.json.Value) ?[]const u8 {
 
 fn parseSeverity(value: ?std.json.Value) model.Severity {
     const s = stringOf(value) orelse return .warning;
-    if (std.mem.eql(u8, s, "error")) return .@"error";
-    if (std.mem.eql(u8, s, "note")) return .note;
+    if (mem.eql(u8, s, "error")) return .@"error";
+    if (mem.eql(u8, s, "note")) return .note;
     return .warning;
 }
 
