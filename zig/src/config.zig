@@ -28,6 +28,15 @@ pub fn parse(model_ptr: *Model, source: []const u8) !void {
     if (obj.get("exclude")) |value| try appendStrings(gpa, &model_ptr.config.exclude, value);
     if (obj.get("test_roots")) |value| try appendStrings(gpa, &model_ptr.config.test_roots, value);
 
+    if (obj.get("graph")) |graph_value| {
+        switch (graph_value) {
+            .object => |graph_cfg| {
+                if (graph_cfg.get("exclude")) |v| try appendStrings(gpa, &model_ptr.config.graph_exclude, v);
+            },
+            else => {},
+        }
+    }
+
     if (obj.get("generated")) |gen_value| {
         switch (gen_value) {
             .object => |gen| {
@@ -253,4 +262,19 @@ test "parse test roots and test-only severity" {
     try std.testing.expectEqual(@as(usize, 2), m.config.test_roots.items.len);
     try std.testing.expectEqualStrings("src/unit_tests.zig", m.config.test_roots.items[0]);
     try std.testing.expectEqual(model.Severity.@"error", m.projectSeverity("test-only-import"));
+}
+
+test "parse graph exclusions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var m = testModel(arena.allocator());
+
+    try parse(&m,
+        \\{"graph":{"exclude":["src/unit_tests.zig","src/integration_tests.zig"]}}
+    );
+
+    try std.testing.expectEqual(@as(usize, 2), m.config.graph_exclude.items.len);
+    try std.testing.expect(m.graphExcludes("src/unit_tests.zig"));
+    try std.testing.expect(m.graphExcludes("src/integration_tests.zig"));
+    try std.testing.expect(!m.graphExcludes("src/main.zig"));
 }

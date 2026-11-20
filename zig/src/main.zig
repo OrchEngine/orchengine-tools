@@ -25,6 +25,7 @@ const usage =
     \\      --no-open         do not open the report in a browser
     \\      --config <file>   read zigdepends.json (default: <path>/zigdepends.json)
     \\      --exclude <glob>  exclude files or directories (repeatable)
+    \\      --graph-exclude <glob>  hide files from the dependency graph (repeatable)
     \\      --include-generated  analyze generated files instead of metrics-boundary mode
     \\      --list-files      print source/generated/excluded file classification
     \\      --no-capabilities skip allocator/Io capability analysis
@@ -35,7 +36,7 @@ const usage =
     \\      --zlint-report <file>  read zlint JSONL findings
     \\  -h, --help            print this help
     \\
-    \\Output: report.html, facades.dot/svg, imports.dot/svg, calls.dot/svg, fields.dot/svg.
+    \\Output: report.html, imports.dot/svg, calls.dot/svg, fields.dot/svg.
     \\
 ;
 
@@ -61,6 +62,7 @@ pub fn main(init: std.process.Init) !void {
     var check_format: check.Format = .text;
     var zlint_report: ?[]const u8 = null;
     var exclude_args: std.ArrayList([]const u8) = .empty;
+    var graph_exclude_args: std.ArrayList([]const u8) = .empty;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -120,6 +122,13 @@ pub fn main(init: std.process.Init) !void {
                 std.process.exit(2);
             }
             try exclude_args.append(arena, args[i]);
+        } else if (std.mem.eql(u8, arg, "--graph-exclude")) {
+            i += 1;
+            if (i == args.len) {
+                std.debug.print("zigdepends: --graph-exclude requires a value\n", .{});
+                std.process.exit(2);
+            }
+            try graph_exclude_args.append(arena, args[i]);
         } else if (std.mem.eql(u8, arg, "--include-generated")) {
             include_generated = true;
         } else if (std.mem.eql(u8, arg, "--list-files")) {
@@ -221,6 +230,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     for (exclude_args.items) |pattern| try m.config.exclude.append(arena, pattern);
+    for (graph_exclude_args.items) |pattern| try m.config.graph_exclude.append(arena, pattern);
     if (include_generated) m.config.include_generated_metrics = true;
     if (!track_capabilities) m.config.track_capabilities = false;
     if (!track_fields) m.config.track_fields = false;
@@ -311,7 +321,6 @@ pub fn main(init: std.process.Init) !void {
         "import cycles: {d}  recursion: {d}  debt: {d} min (~{d:.1} h)\n" ++
             "report: {s}\n" ++
             "dot:    {s}\n" ++
-            "dot:    {s}\n" ++
             "dot:    {s}\n",
         .{
             m.import_cycles.items.len,
@@ -319,7 +328,6 @@ pub fn main(init: std.process.Init) !void {
             m.total_debt,
             @as(f64, @floatFromInt(m.total_debt)) / 60.0,
             paths.html,
-            paths.facades_dot,
             paths.imports_dot,
             paths.calls_dot,
         },
