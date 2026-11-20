@@ -6,6 +6,7 @@
 //! Methods are skipped because zlint does not yet resolve member calls.
 
 const std = @import("std");
+const mem = std.mem;
 const zlint = @import("zlint");
 
 const Rule = zlint.linter.rule.Rule;
@@ -40,7 +41,7 @@ pub fn runOnSymbol(self: *const UncalledPrivateFunction, symbol: Symbol.Id, ctx:
     if (references.len != 0) return;
 
     const name = symbols.items(.name)[s];
-    if (name.len == 0 or std.mem.eql(u8, name, "main")) return;
+    if (name.len == 0 or mem.eql(u8, name, "main")) return;
 
     const token = symbols.items(.token)[s].unwrap() orelse return;
     ctx.report(ctx.diagnosticf(

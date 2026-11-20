@@ -5,6 +5,7 @@
 //! submodules below their parent module. The report renders one interactive
 //! graph from the payload; Graphviz supplies the initial node positions.
 const std = @import("std");
+const mem = std.mem;
 const Io = std.Io;
 const model = @import("model.zig");
 
@@ -17,8 +18,8 @@ pub const Group = struct {
     path: []const u8,
     name: []const u8,
     parent: ?u32 = null,
-    files: std.ArrayListUnmanaged(u32) = .empty,
-    children: std.ArrayListUnmanaged(u32) = .empty,
+    files: std.ArrayList(u32) = .empty,
+    children: std.ArrayList(u32) = .empty,
     file_count: u32 = 0,
     generated_count: u32 = 0,
     cycle_files: u32 = 0,
@@ -27,7 +28,7 @@ pub const Group = struct {
 
 pub const Hierarchy = struct {
     gpa: Gpa,
-    groups: std.ArrayListUnmanaged(Group) = .empty,
+    groups: std.ArrayList(Group) = .empty,
     by_path: std.StringHashMapUnmanaged(u32) = .empty,
     file_groups: []u32 = &.{},
     file_paths: []const []const u8 = &.{},
@@ -139,11 +140,11 @@ pub fn buildPaths(
 
 fn addDirectories(gpa: Gpa, dirs: *std.StringHashMapUnmanaged(void), path_raw: []const u8) !void {
     const path = stripDotSlash(path_raw);
-    var dir = std.fs.path.dirname(path) orelse return;
-    while (dir.len > 0 and !std.mem.eql(u8, dir, ".")) {
+    var dir = std.Io.Dir.path.dirname(path) orelse return;
+    while (dir.len > 0 and !mem.eql(u8, dir, ".")) {
         if (dirs.contains(dir)) return;
         try dirs.put(gpa, dir, {});
-        dir = std.fs.path.dirname(dir) orelse return;
+        dir = std.Io.Dir.path.dirname(dir) orelse return;
     }
 }
 
@@ -155,7 +156,7 @@ fn collectFacadeDirs(
 ) !void {
     for (labels) |path_raw| {
         const path = stripDotSlash(path_raw);
-        if (!std.mem.endsWith(u8, path, ".zig")) continue;
+        if (!mem.endsWith(u8, path, ".zig")) continue;
         const stem = path[0 .. path.len - 4];
         if (dirs.contains(stem)) try facade_dirs.put(gpa, stem, {});
     }
@@ -166,16 +167,16 @@ fn groupPathForFile(
     facade_dirs: *const std.StringHashMapUnmanaged(void),
 ) []const u8 {
     const path = stripDotSlash(path_raw);
-    const dir = std.fs.path.dirname(path) orelse return "";
-    if (std.mem.endsWith(u8, path, ".zig")) {
+    const dir = std.Io.Dir.path.dirname(path) orelse return "";
+    if (mem.endsWith(u8, path, ".zig")) {
         const stem = path[0 .. path.len - 4];
         if (facade_dirs.contains(stem)) return displayPath(stem);
-        if (std.mem.eql(u8, dir, "src")) return displayPath(stem);
+        if (mem.eql(u8, dir, "src")) return displayPath(stem);
     }
     const root = moduleRoot(dir);
-    if (std.mem.eql(u8, root, dir)) return displayPath(root);
+    if (mem.eql(u8, root, dir)) return displayPath(root);
     var current = dir;
-    while (!std.mem.eql(u8, current, root)) {
+    while (!mem.eql(u8, current, root)) {
         if (facade_dirs.contains(current)) return displayPath(current);
         current = parentPath(current);
     }
@@ -183,23 +184,23 @@ fn groupPathForFile(
 }
 
 fn moduleRoot(dir: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, dir, "src/")) {
+    if (mem.startsWith(u8, dir, "src/")) {
         const rest = dir[4..];
-        const slash = std.mem.indexOfScalar(u8, rest, '/') orelse return dir;
+        const slash = mem.findScalar(u8, rest, '/') orelse return dir;
         return dir[0 .. 4 + slash];
     }
-    const slash = std.mem.indexOfScalar(u8, dir, '/') orelse return dir;
+    const slash = mem.findScalar(u8, dir, '/') orelse return dir;
     return dir[0..slash];
 }
 
 fn displayPath(path: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, path, "src/")) return path[4..];
+    if (mem.startsWith(u8, path, "src/")) return path[4..];
     return path;
 }
 
 fn stripDotSlash(s: []const u8) []const u8 {
     var out = s;
-    while (std.mem.startsWith(u8, out, "./")) out = out[2..];
+    while (mem.startsWith(u8, out, "./")) out = out[2..];
     return out;
 }
 
@@ -209,7 +210,7 @@ fn ensureGroup(self: *Hierarchy, path: []const u8) !u32 {
     const parent_path = if (path.len == 0) null else parentPath(path);
     const parent_id = if (parent_path) |parent| try ensureGroup(self, parent) else null;
     const id: u32 = @intCast(self.groups.items.len);
-    const name = if (path.len == 0) "(root)" else std.fs.path.basename(path);
+    const name = if (path.len == 0) "(root)" else std.Io.Dir.path.basename(path);
 
     try self.groups.append(self.gpa, .{
         .path = path,
@@ -222,8 +223,8 @@ fn ensureGroup(self: *Hierarchy, path: []const u8) !u32 {
 }
 
 fn parentPath(path: []const u8) []const u8 {
-    const dir = std.fs.path.dirname(path) orelse return "";
-    if (std.mem.eql(u8, dir, ".")) return "";
+    const dir = std.Io.Dir.path.dirname(path) orelse return "";
+    if (mem.eql(u8, dir, ".")) return "";
     return dir;
 }
 
@@ -255,9 +256,9 @@ fn computeStats(self: *Hierarchy, group_idx: u32, generated: []const bool, cycle
 
 fn isFacadeFile(self: *const Hierarchy, group_idx: u32, file_idx: u32) bool {
     const group = self.groups.items[group_idx];
-    const base = std.fs.path.basename(self.file_paths[file_idx]);
-    if (!std.mem.endsWith(u8, base, ".zig")) return false;
-    return std.mem.eql(u8, base[0 .. base.len - 4], group.name);
+    const base = std.Io.Dir.path.basename(self.file_paths[file_idx]);
+    if (!mem.endsWith(u8, base, ".zig")) return false;
+    return mem.eql(u8, base[0 .. base.len - 4], group.name);
 }
 
 const ModuleEdge = struct {
@@ -270,13 +271,13 @@ const ModuleEdge = struct {
 
 const ModuleTarjan = struct {
     gpa: Gpa,
-    adjacency: []const std.ArrayListUnmanaged(u32),
+    adjacency: []const std.ArrayList(u32),
     index: []i32,
     low: []u32,
     on_stack: []bool,
-    stack: std.ArrayListUnmanaged(u32) = .empty,
+    stack: std.ArrayList(u32) = .empty,
     next_index: u32 = 0,
-    components: *std.ArrayListUnmanaged([]u32),
+    components: *std.ArrayList([]u32),
 };
 
 fn moduleStrongconnect(t: *ModuleTarjan, v: u32) !void {
@@ -296,7 +297,7 @@ fn moduleStrongconnect(t: *ModuleTarjan, v: u32) !void {
     }
 
     if (t.low[v] == @as(u32, @intCast(t.index[v]))) {
-        var component: std.ArrayListUnmanaged(u32) = .empty;
+        var component: std.ArrayList(u32) = .empty;
         defer component.deinit(t.gpa);
         while (true) {
             const w = t.stack.pop().?;
@@ -313,7 +314,7 @@ fn moduleStrongconnect(t: *ModuleTarjan, v: u32) !void {
 /// Detect cycles between top-level facade/module groups. Root files and
 /// generated files are excluded; caller-supplied graph exclusions are honored.
 pub fn detectModuleCycles(gpa: Gpa, model_ptr: *const Model, h: *const Hierarchy) ![]model.ModuleCycle {
-    var adjacency = try gpa.alloc(std.ArrayListUnmanaged(u32), h.groups.items.len);
+    var adjacency = try gpa.alloc(std.ArrayList(u32), h.groups.items.len);
     defer {
         for (adjacency) |*list| list.deinit(gpa);
         gpa.free(adjacency);
@@ -358,7 +359,7 @@ pub fn detectModuleCycles(gpa: Gpa, model_ptr: *const Model, h: *const Hierarchy
     @memset(index, -1);
     @memset(on_stack, false);
 
-    var components: std.ArrayListUnmanaged([]u32) = .empty;
+    var components: std.ArrayList([]u32) = .empty;
     defer {
         for (components.items) |component| gpa.free(component);
         components.deinit(gpa);
@@ -376,7 +377,7 @@ pub fn detectModuleCycles(gpa: Gpa, model_ptr: *const Model, h: *const Hierarchy
         if (index[v] < 0) try moduleStrongconnect(&t, @intCast(v));
     }
 
-    var cycles: std.ArrayListUnmanaged(model.ModuleCycle) = .empty;
+    var cycles: std.ArrayList(model.ModuleCycle) = .empty;
     errdefer cycles.deinit(gpa);
     for (components.items) |component| {
         try appendModuleCycle(gpa, model_ptr, h, &edges, component, &cycles);
@@ -390,7 +391,7 @@ fn appendModuleCycle(
     h: *const Hierarchy,
     edges: *const std.AutoHashMapUnmanaged(u64, ModuleEdge),
     component: []const u32,
-    cycles: *std.ArrayListUnmanaged(model.ModuleCycle),
+    cycles: *std.ArrayList(model.ModuleCycle),
 ) !void {
     var members: std.AutoHashMapUnmanaged(u32, void) = .empty;
     defer members.deinit(gpa);
@@ -413,9 +414,9 @@ fn appendModuleCycle(
     for (component, 0..) |group_idx, i| {
         modules[i] = h.groups.items[group_idx].path;
     }
-    std.mem.sort([]const u8, modules, {}, struct {
+    mem.sort([]const u8, modules, {}, struct {
         fn less(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
+            return mem.lessThan(u8, a, b);
         }
     }.less);
 
@@ -470,7 +471,7 @@ fn writeClusterAttrs(w: *std.Io.Writer, h: *const Hierarchy, group: *const Group
     var suffix: []const u8 = "";
     if (group.cycle_files > 0) suffix = " · cycle";
     if (group.file_count > 0 and group.generated_count == group.file_count) suffix = " · generated";
-    const label = try std.fmt.allocPrint(h.gpa, "{s}\n{s} · {d} {s}{s}", .{
+    const label = try h.gpa.print("{s}\n{s} · {d} {s}{s}", .{
         group.name,
         kind,
         group.file_count,
@@ -493,12 +494,12 @@ fn writeFileNode(w: *std.Io.Writer, model_ptr: *const Model, file_idx: u32) !voi
     } else {
         try w.writeAll("style=\"rounded,filled\", fillcolor=\"#f3e8fd\", color=\"#8250df\"");
     }
-    var label = std.fs.path.basename(file.path);
-    if (file.generated) label = try std.fmt.allocPrint(gpa, "{s} (generated)", .{label});
+    var label = std.Io.Dir.path.basename(file.path);
+    if (file.generated) label = try gpa.print("{s} (generated)", .{label});
     try w.writeAll(", label=");
     try dotStr(w, label);
     try w.writeAll(", tooltip=");
-    const tip = try std.fmt.allocPrint(gpa, "{s}\n{d} functions · {d} min debt", .{
+    const tip = try gpa.print("{s}\n{d} functions · {d} min debt", .{
         model_ptr.fileLabel(file_idx),
         file.fns.items.len,
         file.debt_min,
@@ -526,7 +527,7 @@ fn writeFileEdges(w: *std.Io.Writer, model_ptr: *const Model, h: *const Hierarch
                 try w.writeAll(", ");
             }
             try w.writeAll("tooltip=");
-            const tip = try std.fmt.allocPrint(gpa, "{s}:{d} → {s}", .{
+            const tip = try gpa.print("{s}:{d} → {s}", .{
                 model_ptr.fileLabel(@intCast(file_idx)),
                 imp.line,
                 model_ptr.fileLabel(target),
@@ -546,7 +547,7 @@ fn writeExternalEdges(w: *std.Io.Writer, model_ptr: *const Model, h: *const Hier
             if (Model.isExternalImport(imp.raw)) continue;
             const ext_id = externals.id(imp.raw) orelse continue;
             try w.print("  f{d} -> ext{d} [style=dashed, color=\"#e37400\", tooltip=", .{ file_idx, ext_id });
-            const tip = try std.fmt.allocPrint(gpa, "{s}:{d} → {s}", .{
+            const tip = try gpa.print("{s}:{d} → {s}", .{
                 model_ptr.fileLabel(@intCast(file_idx)),
                 imp.line,
                 imp.raw,
@@ -606,18 +607,18 @@ fn parsePlain(gpa: Gpa, source: []const u8) !Layout {
     errdefer layout.deinit();
 
     var graph_height: f64 = 0;
-    var lines = std.mem.splitScalar(u8, source, '\n');
+    var lines = mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        var tokens = std.mem.tokenizeAny(u8, line, " \t\r");
+        var tokens = mem.tokenizeAny(u8, line, " \t\r");
         const tag = tokens.next() orelse continue;
-        if (std.mem.eql(u8, tag, "graph")) {
+        if (mem.eql(u8, tag, "graph")) {
             _ = tokens.next() orelse continue;
             const width = parseFloatToken(&tokens) catch continue;
             const height = parseFloatToken(&tokens) catch continue;
             layout.width = width * 72.0;
             layout.height = height * 72.0;
             graph_height = height;
-        } else if (std.mem.eql(u8, tag, "node")) {
+        } else if (mem.eql(u8, tag, "node")) {
             const name = tokens.next() orelse continue;
             const x = parseFloatToken(&tokens) catch continue;
             const y = parseFloatToken(&tokens) catch continue;
@@ -641,11 +642,11 @@ fn parseFloatToken(tokens: anytype) !f64 {
 }
 
 fn nodeKey(name: []const u8) ?u64 {
-    if (std.mem.startsWith(u8, name, "ext")) {
+    if (mem.startsWith(u8, name, "ext")) {
         const id = std.fmt.parseUnsigned(u32, name[3..], 10) catch return null;
         return externalKey(id);
     }
-    if (std.mem.startsWith(u8, name, "f")) {
+    if (mem.startsWith(u8, name, "f")) {
         const id = std.fmt.parseUnsigned(u32, name[1..], 10) catch return null;
         return @as(u64, id);
     }
@@ -727,7 +728,7 @@ fn writeNodes(s: *std.json.Stringify, model_ptr: *const Model, h: *const Hierarc
         try s.objectField("group");
         try s.write(h.file_groups[file_idx]);
         try s.objectField("label");
-        try s.write(std.fs.path.basename(file.path));
+        try s.write(std.Io.Dir.path.basename(file.path));
         try s.objectField("path");
         try s.write(model_ptr.fileLabel(@intCast(file_idx)));
         try s.objectField("x");
@@ -826,7 +827,7 @@ fn writePayloadExternalEdges(s: *std.json.Stringify, model_ptr: *const Model, h:
 
 const Externals = struct {
     gpa: Gpa,
-    names: std.ArrayListUnmanaged([]const u8) = .empty,
+    names: std.ArrayList([]const u8) = .empty,
     by_name: std.StringHashMapUnmanaged(u32) = .empty,
 
     fn collect(gpa: Gpa, model_ptr: *const Model, h: *const Hierarchy) !Externals {
@@ -967,11 +968,11 @@ test "detailed graph nests submodules inside facades" {
     try writeDetailed(&aw.writer, &m, &h);
     const dot = aw.written();
 
-    try std.testing.expect(std.mem.indexOf(u8, dot, "digraph imports") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dot, "compound=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dot, "label=\"editor\\nfacade · 4 files\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dot, "label=\"graph\\nfacade · 2 files\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dot, "label=\"graph.zig\"") != null);
+    try std.testing.expect(mem.find(u8, dot, "digraph imports") != null);
+    try std.testing.expect(mem.find(u8, dot, "compound=true") != null);
+    try std.testing.expect(mem.find(u8, dot, "label=\"editor\\nfacade · 4 files\"") != null);
+    try std.testing.expect(mem.find(u8, dot, "label=\"graph\\nfacade · 2 files\"") != null);
+    try std.testing.expect(mem.find(u8, dot, "label=\"graph.zig\"") != null);
 }
 
 test "parse graphviz plain layout" {
@@ -1025,10 +1026,10 @@ test "payload embeds hierarchy and visible edges" {
     try writePayload(&aw.writer, &m, &h, &layout);
     const json = aw.written();
 
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"groups\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"nodes\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "src/unit_tests.zig") == null);
-    try std.testing.expect(std.mem.indexOf(u8, json, "\"from\":0") != null);
+    try std.testing.expect(mem.find(u8, json, "\"groups\"") != null);
+    try std.testing.expect(mem.find(u8, json, "\"nodes\"") != null);
+    try std.testing.expect(mem.find(u8, json, "src/unit_tests.zig") == null);
+    try std.testing.expect(mem.find(u8, json, "\"from\":0") != null);
 }
 
 test "module cycles detect facade cycles without file cycles" {

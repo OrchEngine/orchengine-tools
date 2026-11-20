@@ -6,6 +6,7 @@
 //! project's `zlint.json`.
 
 const std = @import("std");
+const mem = std.mem;
 const zlint = @import("zlint");
 
 const Rule = zlint.linter.rule.Rule;
@@ -30,7 +31,7 @@ pub fn runOnNode(self: *const MaxFunctionLines, wrapper: NodeWrapper, ctx: *Lint
     const ast = ctx.ast();
     const span = ctx.semantic.nodeSpan(wrapper.idx);
     const text = ctx.source.text()[span.start..span.end];
-    const lines: u32 = @intCast(std.mem.countScalar(u8, text, '\n') + 1);
+    const lines: u32 = @intCast(mem.countScalar(u8, text, '\n') + 1);
     if (lines <= self.max_lines) return;
 
     var buf: [1]zlint.Semantic.Ast.Node.Index = undefined;

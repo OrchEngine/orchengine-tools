@@ -5,6 +5,7 @@
 //! `zlint.json`.
 
 const std = @import("std");
+const mem = std.mem;
 const zlint = @import("zlint");
 
 const Rule = zlint.linter.rule.Rule;
@@ -30,11 +31,11 @@ fn isBuiltinCall(tag: zlint.Semantic.Ast.Node.Tag) bool {
 }
 
 fn banned(name: []const u8) bool {
-    return std.mem.eql(u8, name, "@ptrCast") or
-        std.mem.eql(u8, name, "@alignCast") or
-        std.mem.eql(u8, name, "@constCast") or
-        std.mem.eql(u8, name, "@intFromPtr") or
-        std.mem.eql(u8, name, "@ptrFromInt");
+    return mem.eql(u8, name, "@ptrCast") or
+        mem.eql(u8, name, "@alignCast") or
+        mem.eql(u8, name, "@constCast") or
+        mem.eql(u8, name, "@intFromPtr") or
+        mem.eql(u8, name, "@ptrFromInt");
 }
 
 pub fn runOnNode(self: *const ForbidCasts, wrapper: NodeWrapper, ctx: *LinterContext) void {
@@ -43,7 +44,7 @@ pub fn runOnNode(self: *const ForbidCasts, wrapper: NodeWrapper, ctx: *LinterCon
 
     const pathname = ctx.source.pathname orelse "";
     for (self.allow_paths) |allowed| {
-        if (std.mem.endsWith(u8, pathname, allowed)) return;
+        if (mem.endsWith(u8, pathname, allowed)) return;
     }
 
     const ast = ctx.ast();

@@ -1,4 +1,5 @@
 const std = @import("std");
+const mem = std.mem;
 const builtin = @import("builtin");
 const Io = std.Io;
 const model = @import("model.zig");
@@ -67,24 +68,24 @@ pub fn main(init: std.process.Init) !void {
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
-        if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+        if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
             std.debug.print("{s}", .{usage});
             return;
-        } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--out")) {
+        } else if (mem.eql(u8, arg, "-o") or mem.eql(u8, arg, "--out")) {
             i += 1;
             if (i == args.len) {
                 std.debug.print("zigdepends: {s} requires a value\n\n{s}", .{ arg, usage });
                 std.process.exit(2);
             }
             out_arg = args[i];
-        } else if (std.mem.eql(u8, arg, "--title")) {
+        } else if (mem.eql(u8, arg, "--title")) {
             i += 1;
             if (i == args.len) {
                 std.debug.print("zigdepends: --title requires a value\n", .{});
                 std.process.exit(2);
             }
             title_arg = args[i];
-        } else if (std.mem.eql(u8, arg, "--min-debt")) {
+        } else if (mem.eql(u8, arg, "--min-debt")) {
             i += 1;
             if (i == args.len) {
                 std.debug.print("zigdepends: --min-debt requires a value\n", .{});
@@ -94,7 +95,7 @@ pub fn main(init: std.process.Init) !void {
                 std.debug.print("zigdepends: invalid --min-debt value '{s}'\n", .{args[i]});
                 std.process.exit(2);
             };
-        } else if (std.mem.eql(u8, arg, "--max-call-nodes")) {
+        } else if (mem.eql(u8, arg, "--max-call-nodes")) {
             i += 1;
             if (i == args.len) {
                 std.debug.print("zigdepends: --max-call-nodes requires a value\n", .{});
@@ -104,65 +105,65 @@ pub fn main(init: std.process.Init) !void {
                 std.debug.print("zigdepends: invalid --max-call-nodes value '{s}'\n", .{args[i]});
                 std.process.exit(2);
             };
-        } else if (std.mem.eql(u8, arg, "--no-graph")) {
+        } else if (mem.eql(u8, arg, "--no-graph")) {
             with_graphs = false;
-        } else if (std.mem.eql(u8, arg, "--no-open")) {
+        } else if (mem.eql(u8, arg, "--no-open")) {
             open_report = false;
-        } else if (std.mem.eql(u8, arg, "--config")) {
+        } else if (mem.eql(u8, arg, "--config")) {
             i += 1;
             if (i == args.len) {
                 std.debug.print("zigdepends: --config requires a value\n", .{});
                 std.process.exit(2);
             }
             config_arg = args[i];
-        } else if (std.mem.eql(u8, arg, "--exclude")) {
+        } else if (mem.eql(u8, arg, "--exclude")) {
             i += 1;
             if (i == args.len) {
                 std.debug.print("zigdepends: --exclude requires a value\n", .{});
                 std.process.exit(2);
             }
             try exclude_args.append(arena, args[i]);
-        } else if (std.mem.eql(u8, arg, "--graph-exclude")) {
+        } else if (mem.eql(u8, arg, "--graph-exclude")) {
             i += 1;
             if (i == args.len) {
                 std.debug.print("zigdepends: --graph-exclude requires a value\n", .{});
                 std.process.exit(2);
             }
             try graph_exclude_args.append(arena, args[i]);
-        } else if (std.mem.eql(u8, arg, "--include-generated")) {
+        } else if (mem.eql(u8, arg, "--include-generated")) {
             include_generated = true;
-        } else if (std.mem.eql(u8, arg, "--list-files")) {
+        } else if (mem.eql(u8, arg, "--list-files")) {
             list_files = true;
-        } else if (std.mem.eql(u8, arg, "--no-capabilities")) {
+        } else if (mem.eql(u8, arg, "--no-capabilities")) {
             track_capabilities = false;
-        } else if (std.mem.eql(u8, arg, "--no-fields")) {
+        } else if (mem.eql(u8, arg, "--no-fields")) {
             track_fields = false;
-        } else if (std.mem.eql(u8, arg, "--debug-io")) {
+        } else if (mem.eql(u8, arg, "--debug-io")) {
             debug_io = true;
-        } else if (std.mem.eql(u8, arg, "--check")) {
+        } else if (mem.eql(u8, arg, "--check")) {
             check_mode = true;
-        } else if (std.mem.eql(u8, arg, "--format")) {
+        } else if (mem.eql(u8, arg, "--format")) {
             i += 1;
             if (i == args.len) {
                 std.debug.print("zigdepends: --format requires a value\n", .{});
                 std.process.exit(2);
             }
-            if (std.mem.eql(u8, args[i], "text")) {
+            if (mem.eql(u8, args[i], "text")) {
                 check_format = .text;
-            } else if (std.mem.eql(u8, args[i], "json")) {
+            } else if (mem.eql(u8, args[i], "json")) {
                 check_format = .json;
             } else {
                 std.debug.print("zigdepends: invalid --format value '{s}'\n", .{args[i]});
                 std.process.exit(2);
             }
-        } else if (std.mem.eql(u8, arg, "--zlint-report")) {
+        } else if (mem.eql(u8, arg, "--zlint-report")) {
             i += 1;
             if (i == args.len) {
                 std.debug.print("zigdepends: --zlint-report requires a value\n", .{});
                 std.process.exit(2);
             }
             zlint_report = args[i];
-        } else if (std.mem.startsWith(u8, arg, "-")) {
+        } else if (mem.startsWith(u8, arg, "-")) {
             std.debug.print("zigdepends: unknown option '{s}'\n\n{s}", .{ arg, usage });
             std.process.exit(2);
         } else {
@@ -171,20 +172,20 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const cwd = try std.process.currentPathAlloc(io, arena);
-    const root = if (std.fs.path.isAbsolute(root_arg))
-        try std.fs.path.resolve(arena, &.{root_arg})
+    const root = if (std.Io.Dir.path.isAbsolute(root_arg))
+        try std.Io.Dir.path.resolveAlloc(arena, &.{root_arg})
     else
-        try std.fs.path.resolve(arena, &.{ cwd, root_arg });
+        try std.Io.Dir.path.resolveAlloc(arena, &.{ cwd, root_arg });
 
-    var project = std.fs.path.basename(root);
-    if (project.len == 0 or std.mem.eql(u8, project, "/") or std.mem.eql(u8, project, ".")) {
+    var project = std.Io.Dir.path.basename(root);
+    if (project.len == 0 or mem.eql(u8, project, "/") or mem.eql(u8, project, ".")) {
         project = "project";
     }
 
     const title = title_arg orelse project;
     const out_dir = out_arg orelse blk: {
         const home = init.environ_map.get("HOME") orelse ".";
-        break :blk try std.fs.path.join(arena, &.{
+        break :blk try std.Io.Dir.path.join(arena, &.{
             home,
             "Projects",
             "orchengine-tools",
@@ -206,16 +207,16 @@ pub fn main(init: std.process.Init) !void {
     };
 
     if (config_arg) |cfg_arg| {
-        const cfg_path = if (std.fs.path.isAbsolute(cfg_arg))
-            try std.fs.path.resolve(arena, &.{cfg_arg})
+        const cfg_path = if (std.Io.Dir.path.isAbsolute(cfg_arg))
+            try std.Io.Dir.path.resolveAlloc(arena, &.{cfg_arg})
         else
-            try std.fs.path.resolve(arena, &.{ cwd, cfg_arg });
+            try std.Io.Dir.path.resolveAlloc(arena, &.{ cwd, cfg_arg });
         config.load(&m, io, cfg_path) catch |err| {
             std.debug.print("zigdepends: cannot load config {s}: {s}\n", .{ cfg_path, @errorName(err) });
             std.process.exit(2);
         };
     } else {
-        const auto_path = try std.fs.path.join(arena, &.{ root, "zigdepends.json" });
+        const auto_path = try std.Io.Dir.path.join(arena, &.{ root, "zigdepends.json" });
         if (Io.Dir.cwd().statFile(io, auto_path, .{})) |stat| {
             if (stat.kind == .file) {
                 config.load(&m, io, auto_path) catch |err| {
@@ -242,10 +243,10 @@ pub fn main(init: std.process.Init) !void {
     try extract.addPath(&m, io, root);
 
     if (zlint_report) |report_arg| {
-        const report_path = if (std.fs.path.isAbsolute(report_arg))
-            try std.fs.path.resolve(arena, &.{report_arg})
+        const report_path = if (std.Io.Dir.path.isAbsolute(report_arg))
+            try std.Io.Dir.path.resolveAlloc(arena, &.{report_arg})
         else
-            try std.fs.path.resolve(arena, &.{ cwd, report_arg });
+            try std.Io.Dir.path.resolveAlloc(arena, &.{ cwd, report_arg });
         zlint.load(&m, io, report_path) catch |err| {
             std.debug.print("zigdepends: cannot read zlint report {s}: {s}\n", .{
                 report_path,
@@ -339,7 +340,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn openReport(io: Io, arena: model.Gpa, cwd: []const u8, html_path: []const u8) void {
-    const abs = std.fs.path.resolve(arena, &.{ cwd, html_path }) catch html_path;
+    const abs = std.Io.Dir.path.resolveAlloc(arena, &.{ cwd, html_path }) catch html_path;
     switch (builtin.os.tag) {
         .macos => runOpener(io, &.{ "open", abs }),
         .windows => runOpener(io, &.{ "cmd", "/c", "start", "", abs }),

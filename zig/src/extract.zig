@@ -1,4 +1,6 @@
 const std = @import("std");
+const mem = std.mem;
+const Allocator = mem.Allocator;
 const Ast = std.zig.Ast;
 const Io = std.Io;
 const model = @import("model.zig");
@@ -73,7 +75,7 @@ fn nestingDepth(ast: *const Ast, start: u32, end: u32) u32 {
         }) catch {};
     }
 
-    std.mem.sort(Ctrl, list.items, {}, lessBySize);
+    mem.sort(Ctrl, list.items, {}, lessBySize);
     var max: u32 = 0;
     for (list.items, 0..) |*item, i| {
         var best_parent: ?*const Ctrl = null;
@@ -185,8 +187,8 @@ fn collectContainers(model_ptr: *Model, ast: *const Ast, source: []const u8, fil
             .container = container.name,
             .file = file_idx,
             .line = Model.lineOf(source, model.spanStart(ast, node)),
-            .is_pointer = std.mem.indexOfScalar(u8, field_type, '*') != null,
-            .is_slice = std.mem.startsWith(u8, std.mem.trimStart(u8, field_type, " \t"), "["),
+            .is_pointer = mem.findScalar(u8, field_type, '*') != null,
+            .is_slice = mem.startsWith(u8, mem.trimStart(u8, field_type, " \t"), "["),
             .is_allocator = looksAllocator(field_type),
             .is_io = looksIoType(field_type),
         });
@@ -233,14 +235,14 @@ fn defaultGeneratedMarker(text: []const u8) bool {
 }
 
 fn detectGenerated(model_ptr: *Model, source: []const u8, rel_path: []const u8) ?[]const u8 {
-    var lines = std.mem.splitScalar(u8, source, '\n');
+    var lines = mem.splitScalar(u8, source, '\n');
     var line_no: usize = 0;
     while (line_no < 20) : (line_no += 1) {
         const raw = lines.next() orelse break;
-        const line = std.mem.trim(u8, raw, " \t\r");
+        const line = mem.trim(u8, raw, " \t\r");
         if (line.len == 0) continue;
-        if (!std.mem.startsWith(u8, line, "//")) break;
-        const text = std.mem.trimStart(u8, line, "/! \t");
+        if (!mem.startsWith(u8, line, "//")) break;
+        const text = mem.trimStart(u8, line, "/! \t");
         if (defaultGeneratedMarker(text)) return "generated header";
         for (model_ptr.config.generated_markers.items) |marker| {
             if (containsIgnoreCase(text, marker)) return "configured generated marker";
@@ -271,24 +273,24 @@ fn listFile(model_ptr: *Model, kind: []const u8, rel_path: []const u8, reason: [
 
 fn looksAllocator(text: []const u8) bool {
     if (containsIgnoreCase(text, "allocator")) return true;
-    if (std.mem.eql(u8, text, "gpa") or std.mem.eql(u8, text, "arena")) return true;
-    if (std.mem.indexOf(u8, text, ".gpa") != null) return true;
-    if (std.mem.indexOf(u8, text, ".arena") != null) return true;
+    if (mem.eql(u8, text, "gpa") or mem.eql(u8, text, "arena")) return true;
+    if (mem.find(u8, text, ".gpa") != null) return true;
+    if (mem.find(u8, text, ".arena") != null) return true;
     if (containsIgnoreCase(text, "std.heap.")) return true;
     return false;
 }
 
 fn looksIo(text: []const u8) bool {
-    if (std.mem.eql(u8, text, "io")) return true;
-    if (std.mem.startsWith(u8, text, "io.")) return true;
-    if (std.mem.startsWith(u8, text, "std.Io")) return true;
+    if (mem.eql(u8, text, "io")) return true;
+    if (mem.startsWith(u8, text, "io.")) return true;
+    if (mem.startsWith(u8, text, "std.Io")) return true;
     if (containsIgnoreCase(text, "std.Io.")) return true;
-    if (std.mem.eql(u8, text, "writer") or std.mem.startsWith(u8, text, "writer.")) return true;
-    if (std.mem.eql(u8, text, "reader") or std.mem.startsWith(u8, text, "reader.")) return true;
-    if (std.mem.eql(u8, text, "self.io") or std.mem.eql(u8, text, "self.writer") or std.mem.eql(u8, text, "self.reader")) return true;
-    if (std.mem.indexOf(u8, text, ".io") != null) return true;
-    if (std.mem.indexOf(u8, text, ".writer") != null) return true;
-    if (std.mem.indexOf(u8, text, ".reader") != null) return true;
+    if (mem.eql(u8, text, "writer") or mem.startsWith(u8, text, "writer.")) return true;
+    if (mem.eql(u8, text, "reader") or mem.startsWith(u8, text, "reader.")) return true;
+    if (mem.eql(u8, text, "self.io") or mem.eql(u8, text, "self.writer") or mem.eql(u8, text, "self.reader")) return true;
+    if (mem.find(u8, text, ".io") != null) return true;
+    if (mem.find(u8, text, ".writer") != null) return true;
+    if (mem.find(u8, text, ".reader") != null) return true;
     return false;
 }
 
@@ -312,7 +314,7 @@ fn isAllocatorMethod(name: []const u8) bool {
         "free",  "realloc",          "create",        "destroy",    "toOwnedSlice",
     };
     for (methods) |m| {
-        if (std.mem.eql(u8, name, m)) return true;
+        if (mem.eql(u8, name, m)) return true;
     }
     return false;
 }
@@ -326,25 +328,25 @@ fn isIoMethodName(name: []const u8) bool {
         "spawn",     "sleep",
     };
     for (methods) |m| {
-        if (std.mem.eql(u8, name, m)) return true;
+        if (mem.eql(u8, name, m)) return true;
     }
     return false;
 }
 
 fn isIoReceiver(text: []const u8) bool {
-    if (std.mem.eql(u8, text, "io") or std.mem.eql(u8, text, "writer") or
-        std.mem.eql(u8, text, "reader") or std.mem.eql(u8, text, "file") or
-        std.mem.eql(u8, text, "dir") or std.mem.eql(u8, text, "res") or
-        std.mem.eql(u8, text, "req") or std.mem.eql(u8, text, "response") or
-        std.mem.eql(u8, text, "request") or std.mem.eql(u8, text, "stream") or
-        std.mem.eql(u8, text, "conn") or std.mem.eql(u8, text, "socket") or
-        std.mem.eql(u8, text, "server") or std.mem.eql(u8, text, "client"))
+    if (mem.eql(u8, text, "io") or mem.eql(u8, text, "writer") or
+        mem.eql(u8, text, "reader") or mem.eql(u8, text, "file") or
+        mem.eql(u8, text, "dir") or mem.eql(u8, text, "res") or
+        mem.eql(u8, text, "req") or mem.eql(u8, text, "response") or
+        mem.eql(u8, text, "request") or mem.eql(u8, text, "stream") or
+        mem.eql(u8, text, "conn") or mem.eql(u8, text, "socket") or
+        mem.eql(u8, text, "server") or mem.eql(u8, text, "client"))
         return true;
-    if (std.mem.indexOf(u8, text, ".writer") != null or
-        std.mem.indexOf(u8, text, ".reader") != null or
-        std.mem.indexOf(u8, text, ".io") != null or
-        std.mem.indexOf(u8, text, ".file") != null or
-        std.mem.indexOf(u8, text, ".dir") != null)
+    if (mem.find(u8, text, ".writer") != null or
+        mem.find(u8, text, ".reader") != null or
+        mem.find(u8, text, ".io") != null or
+        mem.find(u8, text, ".file") != null or
+        mem.find(u8, text, ".dir") != null)
         return true;
     return false;
 }
@@ -366,16 +368,16 @@ fn betterIoSource(current: model.CapSource, candidate: model.CapSource) model.Ca
 fn markAllocatorUse(f: *model.FnInfo, expr: []const u8) void {
     f.direct_allocator = true;
     var source: model.CapSource = .local;
-    if (std.mem.indexOf(u8, expr, ".allocator") != null or
-        std.mem.indexOf(u8, expr, ".arena") != null or
-        std.mem.indexOf(u8, expr, ".gpa") != null or
-        std.mem.startsWith(u8, expr, "self.") or
-        std.mem.startsWith(u8, expr, "this."))
+    if (mem.find(u8, expr, ".allocator") != null or
+        mem.find(u8, expr, ".arena") != null or
+        mem.find(u8, expr, ".gpa") != null or
+        mem.startsWith(u8, expr, "self.") or
+        mem.startsWith(u8, expr, "this."))
     {
         source = .field;
     } else if (containsIgnoreCase(expr, "std.heap.") or containsIgnoreCase(expr, "std.testing.")) {
         source = .global;
-    } else if (f.sig_allocator and std.mem.indexOfScalar(u8, expr, '.') == null) {
+    } else if (f.sig_allocator and mem.findScalar(u8, expr, '.') == null) {
         source = .param;
     }
     f.alloc_source = betterAllocSource(f.alloc_source, source);
@@ -384,16 +386,16 @@ fn markAllocatorUse(f: *model.FnInfo, expr: []const u8) void {
 fn markIoUse(f: *model.FnInfo, expr: []const u8) void {
     f.direct_io = true;
     var source: model.CapSource = .local;
-    if (std.mem.indexOf(u8, expr, ".io") != null or
-        std.mem.indexOf(u8, expr, ".writer") != null or
-        std.mem.indexOf(u8, expr, ".reader") != null or
-        std.mem.startsWith(u8, expr, "self.") or
-        std.mem.startsWith(u8, expr, "this."))
+    if (mem.find(u8, expr, ".io") != null or
+        mem.find(u8, expr, ".writer") != null or
+        mem.find(u8, expr, ".reader") != null or
+        mem.startsWith(u8, expr, "self.") or
+        mem.startsWith(u8, expr, "this."))
     {
         source = .field;
     } else if (containsIgnoreCase(expr, "std.testing.")) {
         source = .global;
-    } else if (f.sig_io and std.mem.indexOfScalar(u8, expr, '.') == null) {
+    } else if (f.sig_io and mem.findScalar(u8, expr, '.') == null) {
         source = .param;
     }
     f.io_source = betterIoSource(f.io_source, source);
@@ -409,9 +411,9 @@ fn markCallCapabilities(
     name: []const u8,
 ) void {
     if (containsIgnoreCase(callee, "std.debug.print")) f.debug_io = true;
-    if (std.mem.startsWith(u8, callee, "std.log.")) f.logging = true;
+    if (mem.startsWith(u8, callee, "std.log.")) f.logging = true;
     if (containsIgnoreCase(callee, "std.heap.")) markAllocatorUse(f, callee);
-    if (std.mem.startsWith(u8, callee, "std.Io")) markIoUse(f, callee);
+    if (mem.startsWith(u8, callee, "std.Io")) markIoUse(f, callee);
 
     if (receiver) |recv| {
         if (looksAllocator(recv)) markAllocatorUse(f, recv);
@@ -420,7 +422,7 @@ fn markCallCapabilities(
 
     var arg_has_allocator = false;
     for (call.ast.params) |param_node| {
-        const text = std.mem.trim(u8, model.tokenTextRange(ast, param_node, source), " \t\r\n");
+        const text = mem.trim(u8, model.tokenTextRange(ast, param_node, source), " \t\r\n");
         if (text.len == 0) continue;
         if (looksAllocator(text)) {
             arg_has_allocator = true;
@@ -469,7 +471,7 @@ fn isCompoundAssign(tag: Ast.Node.Tag) bool {
 fn containsWord(haystack: []const u8, needle: []const u8) bool {
     if (needle.len == 0) return false;
     var i: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, i, needle)) |found| {
+    while (mem.findPos(u8, haystack, i, needle)) |found| {
         const before_ok = found == 0 or !std.ascii.isAlphanumeric(haystack[found - 1]) and haystack[found - 1] != '_';
         const end = found + needle.len;
         const after_ok = end == haystack.len or !std.ascii.isAlphanumeric(haystack[end]) and haystack[end] != '_';
@@ -491,7 +493,7 @@ fn typeNameFromText(model_ptr: *Model, file_idx: u32, text: []const u8) ?[]const
 
 fn findField(model_ptr: *Model, type_id: u32, field_name: []const u8) ?u32 {
     for (model_ptr.types.items[type_id].fields.items) |field_id| {
-        if (std.mem.eql(u8, model_ptr.fields.items[field_id].name, field_name)) return field_id;
+        if (mem.eql(u8, model_ptr.fields.items[field_id].name, field_name)) return field_id;
     }
     return null;
 }
@@ -511,7 +513,7 @@ fn resolveBaseType(
     switch (ast.nodeTag(node)) {
         .identifier => {
             const text = ast.tokenSlice(ast.nodeMainToken(node));
-            if (std.mem.eql(u8, text, "self")) return fn_info.parent;
+            if (mem.eql(u8, text, "self")) return fn_info.parent;
             if (locals.get(text)) |name| return name;
             if (model_ptr.files.items[file_idx].type_names.contains(text)) return text;
             return null;
@@ -649,7 +651,7 @@ fn extractFieldAccesses(model_ptr: *Model, ast: *const Ast, source: []const u8, 
 fn addImport(model_ptr: *Model, file_idx: u32, imp: model.Import) !void {
     const file = &model_ptr.files.items[file_idx];
     for (file.imports.items) |*existing| {
-        if (std.mem.eql(u8, existing.raw, imp.raw)) {
+        if (mem.eql(u8, existing.raw, imp.raw)) {
             if (existing.alias == null and imp.alias != null) {
                 existing.alias = imp.alias;
                 existing.alias_start = imp.alias_start;
@@ -670,7 +672,7 @@ pub fn addPath(model_ptr: *Model, io: Io, arg: []const u8) !void {
     };
 
     switch (stat.kind) {
-        .file => try parseFile(model_ptr, io, arg, std.fs.path.basename(arg)),
+        .file => try parseFile(model_ptr, io, arg, std.Io.Dir.path.basename(arg)),
         .directory => {
             var dir = try Io.Dir.cwd().openDir(io, arg, .{ .iterate = true });
             defer dir.close(io);
@@ -678,7 +680,7 @@ pub fn addPath(model_ptr: *Model, io: Io, arg: []const u8) !void {
             defer walker.deinit();
             while (try walker.next(io)) |entry| {
                 if (entry.kind != .file) continue;
-                if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+                if (!mem.endsWith(u8, entry.basename, ".zig")) continue;
                 if (hasComponent(entry.path, "zig-cache")) continue;
                 if (hasComponent(entry.path, ".zig-cache")) continue;
                 if (hasComponent(entry.path, "zig-out")) continue;
@@ -686,10 +688,10 @@ pub fn addPath(model_ptr: *Model, io: Io, arg: []const u8) !void {
                 if (hasComponent(entry.path, ".tmp")) continue;
                 if (hasComponent(entry.path, "node_modules")) continue;
                 if (hasComponent(entry.path, ".git")) continue;
-                const display = if (std.mem.endsWith(u8, arg, "/"))
-                    try std.fmt.allocPrint(model_ptr.gpa, "{s}{s}", .{ arg, entry.path })
+                const display = if (mem.endsWith(u8, arg, "/"))
+                    try model_ptr.gpa.print("{s}{s}", .{ arg, entry.path })
                 else
-                    try std.fmt.allocPrint(model_ptr.gpa, "{s}/{s}", .{ arg, entry.path });
+                    try model_ptr.gpa.print("{s}/{s}", .{ arg, entry.path });
                 try parseFile(model_ptr, io, display, entry.path);
             }
         },
@@ -711,7 +713,7 @@ fn extractImports(model_ptr: *Model, ast: *const Ast, source: []const u8, file_i
         const init = vd.ast.init_node.unwrap() orelse continue;
         const init_tag = ast.nodeTag(init);
         if (init_tag != .builtin_call_two and init_tag != .builtin_call) continue;
-        if (!std.mem.eql(u8, ast.tokenSlice(ast.nodeMainToken(init)), "@import")) continue;
+        if (!mem.eql(u8, ast.tokenSlice(ast.nodeMainToken(init)), "@import")) continue;
         const params = ast.builtinCallParams(&pbuf, init) orelse continue;
         if (params.len != 1 or ast.nodeTag(params[0]) != .string_literal) continue;
         const lit = ast.tokenSlice(ast.nodeMainToken(params[0]));
@@ -731,7 +733,7 @@ fn extractImports(model_ptr: *Model, ast: *const Ast, source: []const u8, file_i
             else => continue,
         }
         const node: Ast.Node.Index = @fromBackingInt(@intCast(raw));
-        if (!std.mem.eql(u8, ast.tokenSlice(ast.nodeMainToken(node)), "@import")) continue;
+        if (!mem.eql(u8, ast.tokenSlice(ast.nodeMainToken(node)), "@import")) continue;
         const params = ast.builtinCallParams(&pbuf, node) orelse continue;
         if (params.len != 1 or ast.nodeTag(params[0]) != .string_literal) continue;
         const lit = ast.tokenSlice(ast.nodeMainToken(params[0]));
@@ -796,7 +798,7 @@ fn markImportTestUsage(model_ptr: *Model, ast: *const Ast, file_idx: u32) !void 
         const text = ast.tokenSlice(token);
         for (file.imports.items) |*imp| {
             const alias = imp.alias orelse continue;
-            if (!std.mem.eql(u8, alias, text)) continue;
+            if (!mem.eql(u8, alias, text)) continue;
             if (insideTestSpan(spans, start)) {
                 imp.test_refs += 1;
             } else {
@@ -934,10 +936,10 @@ fn parseFile(model_ptr: *Model, io: Io, path: []const u8, rel_path: []const u8) 
         const f = model_ptr.fns.items[fn_idx];
         const parent = f.parent orelse continue;
         const type_id = model_ptr.files.items[file_idx].type_names.get(parent) orelse continue;
-        if (std.mem.eql(u8, f.name, "init") or std.mem.eql(u8, f.name, "create")) {
+        if (mem.eql(u8, f.name, "init") or mem.eql(u8, f.name, "create")) {
             model_ptr.types.items[type_id].has_init = true;
         }
-        if (std.mem.eql(u8, f.name, "deinit") or std.mem.eql(u8, f.name, "destroy") or std.mem.eql(u8, f.name, "free")) {
+        if (mem.eql(u8, f.name, "deinit") or mem.eql(u8, f.name, "destroy") or mem.eql(u8, f.name, "free")) {
             model_ptr.types.items[type_id].has_deinit = true;
         }
     }
@@ -951,14 +953,14 @@ fn parseFile(model_ptr: *Model, io: Io, path: []const u8, rel_path: []const u8) 
         if (!is_call) continue;
         const node: Ast.Node.Index = @fromBackingInt(@intCast(raw));
         const call = ast.fullCall(&fbuf, node) orelse continue;
-        const callee = std.mem.trim(u8, model.tokenTextRange(&ast, call.ast.fn_expr, source), " \t\r\n");
+        const callee = mem.trim(u8, model.tokenTextRange(&ast, call.ast.fn_expr, source), " \t\r\n");
         if (callee.len == 0 or callee[0] == '@') continue;
 
         var name = callee;
         var receiver: ?[]const u8 = null;
-        if (std.mem.lastIndexOfScalar(u8, callee, '.')) |dot| {
-            receiver = std.mem.trim(u8, callee[0..dot], " \t\r\n");
-            name = std.mem.trim(u8, callee[dot + 1 ..], " \t\r\n");
+        if (mem.findScalarLast(u8, callee, '.')) |dot| {
+            receiver = mem.trim(u8, callee[0..dot], " \t\r\n");
+            name = mem.trim(u8, callee[dot + 1 ..], " \t\r\n");
         }
         if (!isIdent(name)) continue;
 
@@ -991,33 +993,33 @@ fn parseFile(model_ptr: *Model, io: Io, path: []const u8, rel_path: []const u8) 
     for (model_ptr.files.items[file_idx].fns.items) |fn_idx| {
         const f = &model_ptr.fns.items[fn_idx];
         const body = source[f.start..f.end];
-        if (std.mem.indexOf(u8, body, "self.allocator") != null or
-            std.mem.indexOf(u8, body, "this.allocator") != null or
-            std.mem.indexOf(u8, body, "self.gpa") != null or
-            std.mem.indexOf(u8, body, "this.gpa") != null)
+        if (mem.find(u8, body, "self.allocator") != null or
+            mem.find(u8, body, "this.allocator") != null or
+            mem.find(u8, body, "self.gpa") != null or
+            mem.find(u8, body, "this.gpa") != null)
         {
             markAllocatorUse(f, "self.allocator");
         }
-        if (std.mem.indexOf(u8, body, "self.io") != null or
-            std.mem.indexOf(u8, body, "this.io") != null)
+        if (mem.find(u8, body, "self.io") != null or
+            mem.find(u8, body, "this.io") != null)
         {
             markIoUse(f, "self.io");
         }
-        if (std.mem.indexOf(u8, body, "std.heap.") != null) {
+        if (mem.find(u8, body, "std.heap.") != null) {
             markAllocatorUse(f, "std.heap.page_allocator");
         }
-        if (std.mem.indexOf(u8, body, "std.testing.allocator") != null) {
+        if (mem.find(u8, body, "std.testing.allocator") != null) {
             markAllocatorUse(f, "std.testing.allocator");
         }
-        if (std.mem.indexOf(u8, body, "std.testing.io") != null) {
+        if (mem.find(u8, body, "std.testing.io") != null) {
             markIoUse(f, "std.testing.io");
         }
-        if (std.mem.indexOf(u8, body, "std.Io") != null) {
+        if (mem.find(u8, body, "std.Io") != null) {
             markIoUse(f, "std.Io");
         }
-        if (std.mem.indexOf(u8, body, "std.debug.print") != null or
-            std.mem.indexOf(u8, body, "std.debug.info") != null) f.debug_io = true;
-        if (std.mem.indexOf(u8, body, "std.log.") != null) f.logging = true;
+        if (mem.find(u8, body, "std.debug.print") != null or
+            mem.find(u8, body, "std.debug.info") != null) f.debug_io = true;
+        if (mem.find(u8, body, "std.log.") != null) f.logging = true;
     }
 
     if (model_ptr.config.track_fields) {
@@ -1043,9 +1045,9 @@ fn parseFile(model_ptr: *Model, io: Io, path: []const u8, rel_path: []const u8) 
 }
 
 fn hasComponent(path: []const u8, name: []const u8) bool {
-    var it = std.mem.splitAny(u8, path, "/\\");
+    var it = mem.splitAny(u8, path, "/\\");
     while (it.next()) |part| {
-        if (std.mem.eql(u8, part, name)) return true;
+        if (mem.eql(u8, part, name)) return true;
     }
     return false;
 }
@@ -1166,7 +1168,7 @@ fn extractTestSource(alloc: Gpa, source: []const u8) !Model {
 fn importByAlias(m: *const Model, file_idx: u32, alias: []const u8) !model.Import {
     for (m.files.items[file_idx].imports.items) |imp| {
         const existing = imp.alias orelse continue;
-        if (std.mem.eql(u8, existing, alias)) return imp;
+        if (mem.eql(u8, existing, alias)) return imp;
     }
     return error.TestExpectedImport;
 }
