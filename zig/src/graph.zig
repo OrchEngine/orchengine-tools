@@ -1,12 +1,11 @@
-//! Dependency graph hierarchy and Graphviz output.
+//! Dependency graph hierarchy, layout, and payload generation.
 //!
 //! Facades follow the repository convention: `src/<module>.zig` is the public
 //! facade and `src/<module>/` contains its internals. The hierarchy nests
-//! submodules below their parent module. The detailed graph renders files
-//! inside those clusters; the facade graph rolls nested modules up and
-//! aggregates cross-module edges for the zoomed-out view.
-
+//! submodules below their parent module. The report renders one interactive
+//! graph from the payload; Graphviz supplies the initial node positions.
 const std = @import("std");
+const Io = std.Io;
 const model = @import("model.zig");
 
 const Gpa = model.Gpa;
@@ -32,6 +31,7 @@ pub const Hierarchy = struct {
     by_path: std.StringHashMapUnmanaged(u32) = .empty,
     file_groups: []u32 = &.{},
     file_paths: []const []const u8 = &.{},
+    file_visible: []bool = &.{},
 
     pub fn deinit(self: *Hierarchy) void {
         for (self.groups.items) |*group| {
@@ -42,6 +42,7 @@ pub const Hierarchy = struct {
         self.by_path.deinit(self.gpa);
         if (self.file_groups.len > 0) self.gpa.free(self.file_groups);
         if (self.file_paths.len > 0) self.gpa.free(self.file_paths);
+        if (self.file_visible.len > 0) self.gpa.free(self.file_visible);
         self.* = undefined;
     }
 
@@ -49,36 +50,30 @@ pub const Hierarchy = struct {
         return self.file_groups[file_idx];
     }
 
-    /// The top-level module that owns a group. Root files stay in the root.
-    pub fn topGroup(self: *const Hierarchy, group_idx: u32) u32 {
-        var current = group_idx;
-        while (self.groups.items[current].parent) |parent| {
-            if (parent == root_group) break;
-            current = parent;
-        }
-        return current;
-    }
-
-    pub fn topGroupOfFile(self: *const Hierarchy, file_idx: u32) u32 {
-        return self.topGroup(self.groupOfFile(file_idx));
+    pub fn isVisible(self: *const Hierarchy, file_idx: u32) bool {
+        return self.file_visible[file_idx];
     }
 };
 
 pub fn build(model_ptr: *const Model) !Hierarchy {
     const gpa = model_ptr.gpa;
-    const labels = try gpa.alloc([]const u8, model_ptr.files.items.len);
+    const count = model_ptr.files.items.len;
+    const labels = try gpa.alloc([]const u8, count);
     defer gpa.free(labels);
-    const generated = try gpa.alloc(bool, model_ptr.files.items.len);
+    const generated = try gpa.alloc(bool, count);
     defer gpa.free(generated);
-    const cycles = try gpa.alloc(bool, model_ptr.files.items.len);
+    const cycles = try gpa.alloc(bool, count);
     defer gpa.free(cycles);
+    const visible = try gpa.alloc(bool, count);
+    defer gpa.free(visible);
 
     for (model_ptr.files.items, 0..) |file, i| {
         labels[i] = model_ptr.fileLabel(@intCast(i));
         generated[i] = file.generated;
         cycles[i] = file.in_import_cycle;
+        visible[i] = !model_ptr.graphExcludes(labels[i]);
     }
-    return buildPaths(gpa, labels, generated, cycles);
+    return buildPaths(gpa, labels, generated, cycles, visible);
 }
 
 pub fn buildPaths(
@@ -86,9 +81,11 @@ pub fn buildPaths(
     labels: []const []const u8,
     generated: []const bool,
     cycles: []const bool,
+    visible: []const bool,
 ) !Hierarchy {
     std.debug.assert(labels.len == generated.len);
     std.debug.assert(labels.len == cycles.len);
+    std.debug.assert(labels.len == visible.len);
 
     var dirs: std.StringHashMapUnmanaged(void) = .empty;
     defer dirs.deinit(gpa);
@@ -102,11 +99,15 @@ pub fn buildPaths(
     const file_paths = try gpa.alloc([]const u8, labels.len);
     errdefer gpa.free(file_paths);
     @memcpy(file_paths, labels);
+    const file_visible = try gpa.alloc(bool, labels.len);
+    errdefer gpa.free(file_visible);
+    @memcpy(file_visible, visible);
 
     var h = Hierarchy{
         .gpa = gpa,
         .file_groups = file_groups,
         .file_paths = file_paths,
+        .file_visible = file_visible,
     };
     errdefer h.deinit();
 
@@ -115,7 +116,7 @@ pub fn buildPaths(
         const group_path = groupPathForFile(path, &facade_dirs);
         const group_id = try ensureGroup(&h, group_path);
         h.file_groups[i] = group_id;
-        try h.groups.items[group_id].files.append(gpa, @intCast(i));
+        if (visible[i]) try h.groups.items[group_id].files.append(gpa, @intCast(i));
     }
 
     finalize(&h, generated, cycles);
@@ -246,7 +247,7 @@ fn isFacadeFile(self: *const Hierarchy, group_idx: u32, file_idx: u32) bool {
 }
 
 pub fn writeDetailed(w: *std.Io.Writer, model_ptr: *const Model, h: *const Hierarchy) !void {
-    var externals = try Externals.collect(h.gpa, model_ptr);
+    var externals = try Externals.collect(h.gpa, model_ptr, h);
     defer externals.deinit();
 
     try w.writeAll("digraph imports {\n");
@@ -257,8 +258,8 @@ pub fn writeDetailed(w: *std.Io.Writer, model_ptr: *const Model, h: *const Hiera
 
     try writeGroup(w, model_ptr, h, root_group);
     try externals.writeNodes(w);
-    try writeFileEdges(w, model_ptr);
-    try writeExternalEdges(w, model_ptr, &externals);
+    try writeFileEdges(w, model_ptr, h);
+    try writeExternalEdges(w, model_ptr, h, &externals);
     try w.writeAll("}\n");
 }
 
@@ -269,7 +270,10 @@ fn writeGroup(w: *std.Io.Writer, model_ptr: *const Model, h: *const Hierarchy, g
         try writeClusterAttrs(w, h, group);
     }
     for (group.files.items) |file_idx| try writeFileNode(w, model_ptr, file_idx);
-    for (group.children.items) |child| try writeGroup(w, model_ptr, h, child);
+    for (group.children.items) |child| {
+        if (h.groups.items[child].file_count == 0) continue;
+        try writeGroup(w, model_ptr, h, child);
+    }
     if (group_idx != root_group) try w.writeAll("  }\n");
 }
 
@@ -282,7 +286,7 @@ fn writeClusterAttrs(w: *std.Io.Writer, h: *const Hierarchy, group: *const Group
     } else {
         try w.writeAll("    fillcolor=\"#fcfaff\";\n    color=\"#d8c2f5\";\n    fontcolor=\"#5b3a8f\";\n");
     }
-    const kind = if (group.is_facade) "facade" else if (group.parent != null and group.parent.? != root_group) "submodule" else "module";
+    const kind = groupKind(group);
     var suffix: []const u8 = "";
     if (group.cycle_files > 0) suffix = " · cycle";
     if (group.file_count > 0 and group.generated_count == group.file_count) suffix = " · generated";
@@ -323,12 +327,14 @@ fn writeFileNode(w: *std.Io.Writer, model_ptr: *const Model, file_idx: u32) !voi
     try w.writeAll("];\n");
 }
 
-fn writeFileEdges(w: *std.Io.Writer, model_ptr: *const Model) !void {
+fn writeFileEdges(w: *std.Io.Writer, model_ptr: *const Model, h: *const Hierarchy) !void {
     const gpa = model_ptr.gpa;
     for (model_ptr.files.items, 0..) |file, file_idx| {
+        if (!h.file_visible[file_idx]) continue;
         for (file.imports.items) |imp| {
             if (imp.excluded) continue;
             const target = imp.resolved orelse continue;
+            if (!h.file_visible[target]) continue;
             const target_file = model_ptr.files.items[target];
             try w.print("  f{d} -> f{d} [", .{ file_idx, target });
             if (target_file.generated) {
@@ -351,9 +357,10 @@ fn writeFileEdges(w: *std.Io.Writer, model_ptr: *const Model) !void {
     }
 }
 
-fn writeExternalEdges(w: *std.Io.Writer, model_ptr: *const Model, externals: *const Externals) !void {
+fn writeExternalEdges(w: *std.Io.Writer, model_ptr: *const Model, h: *const Hierarchy, externals: *const Externals) !void {
     const gpa = model_ptr.gpa;
     for (model_ptr.files.items, 0..) |file, file_idx| {
+        if (!h.file_visible[file_idx]) continue;
         for (file.imports.items) |imp| {
             if (imp.excluded or imp.resolved != null) continue;
             if (Model.isExternalImport(imp.raw)) continue;
@@ -370,201 +377,271 @@ fn writeExternalEdges(w: *std.Io.Writer, model_ptr: *const Model, externals: *co
     }
 }
 
-pub fn writeFacades(w: *std.Io.Writer, model_ptr: *const Model, h: *const Hierarchy) !void {
-    var externals = try Externals.collect(h.gpa, model_ptr);
-    defer externals.deinit();
-    const tops = try collectTops(h, h.gpa);
-    defer h.gpa.free(tops);
-
-    var edges: std.AutoHashMapUnmanaged(u64, EdgeStats) = .empty;
-    defer edges.deinit(h.gpa);
-    var external_edges: std.AutoHashMapUnmanaged(u64, EdgeStats) = .empty;
-    defer external_edges.deinit(h.gpa);
-    try aggregateEdges(model_ptr, h, &externals, &edges, &external_edges);
-
-    try w.writeAll("digraph facades {\n");
-    try w.writeAll("  graph [rankdir=LR, bgcolor=\"white\", fontname=\"Helvetica\", fontsize=10, nodesep=0.2, ranksep=0.4, labelloc=t];\n");
-    try w.writeAll("  node [fontname=\"Helvetica\", fontsize=10];\n");
-    try w.writeAll("  edge [fontname=\"Helvetica\", fontsize=8, arrowsize=0.7, color=\"#5b6b7c\"];\n");
-
-    try writeFacadeNodes(w, h, tops);
-    try externals.writeNodes(w);
-    try writeFacadeEdges(w, h, tops, &edges);
-    try writeFacadeExternalEdges(w, h, tops, &externals, &external_edges);
-    try w.writeAll("}\n");
-}
-
-const EdgeStats = struct {
-    count: u32 = 0,
-    cycle: u32 = 0,
-    generated: u32 = 0,
+pub const Box = struct {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
 };
 
-fn collectTops(h: *const Hierarchy, gpa: Gpa) ![]u32 {
-    var tops: std.ArrayListUnmanaged(u32) = .empty;
-    errdefer tops.deinit(gpa);
-    for (h.groups.items, 0..) |group, group_idx| {
-        const is_top = group_idx == root_group or group.parent == root_group;
-        if (!is_top) continue;
-        const count = if (group_idx == root_group) group.files.items.len else group.file_count;
-        if (count == 0) continue;
-        try tops.append(gpa, @intCast(group_idx));
+pub const Layout = struct {
+    gpa: Gpa,
+    boxes: std.AutoHashMapUnmanaged(u64, Box) = .empty,
+    width: f64 = 0,
+    height: f64 = 0,
+
+    pub fn empty(gpa: Gpa) Layout {
+        return .{ .gpa = gpa };
     }
-    return tops.toOwnedSlice(gpa);
+
+    pub fn deinit(self: *Layout) void {
+        self.boxes.deinit(self.gpa);
+        self.* = undefined;
+    }
+
+    pub fn load(gpa: Gpa, io: Io, dot_path: []const u8) !Layout {
+        const argv = [_][]const u8{ "dot", "-Tplain", dot_path };
+        const result = try std.process.run(gpa, io, .{ .argv = &argv });
+        defer gpa.free(result.stderr);
+        defer gpa.free(result.stdout);
+        if (!result.term.success()) return error.GraphvizFailed;
+        return parsePlain(gpa, result.stdout);
+    }
+
+    pub fn fileBox(self: *const Layout, file_idx: u32) ?Box {
+        return self.boxes.get(@as(u64, file_idx));
+    }
+
+    pub fn externalBox(self: *const Layout, ext_idx: u32) ?Box {
+        return self.boxes.get(externalKey(ext_idx));
+    }
+};
+
+fn externalKey(ext_idx: u32) u64 {
+    return (@as(u64, 1) << 32) | @as(u64, ext_idx);
 }
 
-fn aggregateEdges(
+fn parsePlain(gpa: Gpa, source: []const u8) !Layout {
+    var layout = Layout.empty(gpa);
+    errdefer layout.deinit();
+
+    var graph_height: f64 = 0;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        var tokens = std.mem.tokenizeAny(u8, line, " \t\r");
+        const tag = tokens.next() orelse continue;
+        if (std.mem.eql(u8, tag, "graph")) {
+            _ = tokens.next() orelse continue;
+            const width = parseFloatToken(&tokens) catch continue;
+            const height = parseFloatToken(&tokens) catch continue;
+            layout.width = width * 72.0;
+            layout.height = height * 72.0;
+            graph_height = height;
+        } else if (std.mem.eql(u8, tag, "node")) {
+            const name = tokens.next() orelse continue;
+            const x = parseFloatToken(&tokens) catch continue;
+            const y = parseFloatToken(&tokens) catch continue;
+            const w = parseFloatToken(&tokens) catch continue;
+            const h = parseFloatToken(&tokens) catch continue;
+            const key = nodeKey(name) orelse continue;
+            try layout.boxes.put(gpa, key, .{
+                .x = (x - w * 0.5) * 72.0,
+                .y = (graph_height - (y + h * 0.5)) * 72.0,
+                .w = w * 72.0,
+                .h = h * 72.0,
+            });
+        }
+    }
+    return layout;
+}
+
+fn parseFloatToken(tokens: anytype) !f64 {
+    const text = tokens.next() orelse return error.InvalidPlain;
+    return std.fmt.parseFloat(f64, text);
+}
+
+fn nodeKey(name: []const u8) ?u64 {
+    if (std.mem.startsWith(u8, name, "ext")) {
+        const id = std.fmt.parseUnsigned(u32, name[3..], 10) catch return null;
+        return externalKey(id);
+    }
+    if (std.mem.startsWith(u8, name, "f")) {
+        const id = std.fmt.parseUnsigned(u32, name[1..], 10) catch return null;
+        return @as(u64, id);
+    }
+    return null;
+}
+
+pub fn writePayload(
+    w: *std.Io.Writer,
     model_ptr: *const Model,
     h: *const Hierarchy,
-    externals: *const Externals,
-    edges: *std.AutoHashMapUnmanaged(u64, EdgeStats),
-    external_edges: *std.AutoHashMapUnmanaged(u64, EdgeStats),
+    layout: *const Layout,
 ) !void {
+    var externals = try Externals.collect(h.gpa, model_ptr, h);
+    defer externals.deinit();
+
+    var s: std.json.Stringify = .{ .writer = w };
+    try s.beginObject();
+    try s.objectField("groups");
+    try writeGroups(&s, h);
+    try s.objectField("nodes");
+    try writeNodes(&s, model_ptr, h, layout);
+    try s.objectField("externals");
+    try writeExternals(&s, layout, &externals);
+    try s.objectField("edges");
+    try writePayloadEdges(&s, model_ptr, h);
+    try s.objectField("externalEdges");
+    try writePayloadExternalEdges(&s, model_ptr, h, &externals);
+    try s.endObject();
+}
+
+fn writeGroups(s: *std.json.Stringify, h: *const Hierarchy) !void {
+    try s.beginArray();
+    for (h.groups.items, 0..) |group, group_idx| {
+        if (group_idx != root_group and group.file_count == 0) continue;
+        try s.beginObject();
+        try s.objectField("id");
+        try s.write(@as(u32, @intCast(group_idx)));
+        try s.objectField("parent");
+        try s.write(group.parent);
+        try s.objectField("name");
+        try s.write(group.name);
+        try s.objectField("path");
+        try s.write(group.path);
+        try s.objectField("kind");
+        try s.write(groupKind(&group));
+        try s.objectField("fileCount");
+        try s.write(group.file_count);
+        try s.objectField("generated");
+        try s.write(group.file_count > 0 and group.generated_count == group.file_count);
+        try s.objectField("cycle");
+        try s.write(group.cycle_files > 0);
+        try s.objectField("facade");
+        try s.write(group.is_facade);
+        try s.endObject();
+    }
+    try s.endArray();
+}
+
+fn groupKind(group: *const Group) []const u8 {
+    if (group.parent == null) return "root";
+    if (group.is_facade) return "facade";
+    if (group.parent.? != root_group) return "submodule";
+    return "module";
+}
+
+fn writeNodes(s: *std.json.Stringify, model_ptr: *const Model, h: *const Hierarchy, layout: *const Layout) !void {
+    try s.beginArray();
     for (model_ptr.files.items, 0..) |file, file_idx| {
-        const from = h.topGroupOfFile(@intCast(file_idx));
+        if (!h.file_visible[file_idx]) continue;
+        const box = layout.fileBox(@intCast(file_idx)) orelse Box{
+            .x = @as(f64, @floatFromInt(file_idx % 10)) * 190.0,
+            .y = @as(f64, @floatFromInt(file_idx / 10)) * 90.0,
+            .w = 160.0,
+            .h = 34.0,
+        };
+        try s.beginObject();
+        try s.objectField("id");
+        try s.write(@as(u32, @intCast(file_idx)));
+        try s.objectField("group");
+        try s.write(h.file_groups[file_idx]);
+        try s.objectField("label");
+        try s.write(std.fs.path.basename(file.path));
+        try s.objectField("path");
+        try s.write(model_ptr.fileLabel(@intCast(file_idx)));
+        try s.objectField("x");
+        try s.write(box.x);
+        try s.objectField("y");
+        try s.write(box.y);
+        try s.objectField("w");
+        try s.write(box.w);
+        try s.objectField("h");
+        try s.write(box.h);
+        try s.objectField("generated");
+        try s.write(file.generated);
+        try s.objectField("cycle");
+        try s.write(file.in_import_cycle);
+        try s.objectField("functions");
+        try s.write(@as(u32, @intCast(file.fns.items.len)));
+        try s.objectField("debt");
+        try s.write(file.debt_min);
+        try s.endObject();
+    }
+    try s.endArray();
+}
+
+fn writeExternals(s: *std.json.Stringify, layout: *const Layout, externals: *const Externals) !void {
+    try s.beginArray();
+    for (externals.names.items, 0..) |name, ext_idx| {
+        const box = layout.externalBox(@intCast(ext_idx)) orelse Box{
+            .x = @as(f64, @floatFromInt(ext_idx % 5)) * 150.0,
+            .y = -120.0,
+            .w = 130.0,
+            .h = 30.0,
+        };
+        try s.beginObject();
+        try s.objectField("id");
+        try s.write(@as(u32, @intCast(ext_idx)));
+        try s.objectField("label");
+        try s.write(name);
+        try s.objectField("x");
+        try s.write(box.x);
+        try s.objectField("y");
+        try s.write(box.y);
+        try s.objectField("w");
+        try s.write(box.w);
+        try s.objectField("h");
+        try s.write(box.h);
+        try s.endObject();
+    }
+    try s.endArray();
+}
+
+fn writePayloadEdges(s: *std.json.Stringify, model_ptr: *const Model, h: *const Hierarchy) !void {
+    try s.beginArray();
+    for (model_ptr.files.items, 0..) |file, file_idx| {
+        if (!h.file_visible[file_idx]) continue;
         for (file.imports.items) |imp| {
             if (imp.excluded) continue;
-            if (imp.resolved) |target| {
-                const to = h.topGroupOfFile(target);
-                if (from == to) continue;
-                const stats = try getEdgeStats(h.gpa, edges, edgeKey(from, to));
-                stats.count += 1;
-                if (file.cycle_id != null and file.cycle_id == model_ptr.files.items[target].cycle_id) {
-                    stats.cycle += 1;
-                }
-                if (model_ptr.files.items[target].generated) stats.generated += 1;
-            } else if (!Model.isExternalImport(imp.raw)) {
-                const ext_id = externals.id(imp.raw) orelse continue;
-                const stats = try getEdgeStats(h.gpa, external_edges, edgeKey(from, ext_id));
-                stats.count += 1;
-            }
+            const target = imp.resolved orelse continue;
+            if (!h.file_visible[target]) continue;
+            try writePayloadEdge(s, @intCast(file_idx), target, file.cycle_id != null and file.cycle_id == model_ptr.files.items[target].cycle_id, model_ptr.files.items[target].generated);
         }
     }
+    try s.endArray();
 }
 
-fn getEdgeStats(gpa: Gpa, map: *std.AutoHashMapUnmanaged(u64, EdgeStats), key: u64) !*EdgeStats {
-    const gop = try map.getOrPut(gpa, key);
-    if (!gop.found_existing) gop.value_ptr.* = .{};
-    return gop.value_ptr;
+fn writePayloadEdge(s: *std.json.Stringify, from: u32, to: u32, cycle: bool, generated: bool) !void {
+    try s.beginObject();
+    try s.objectField("from");
+    try s.write(from);
+    try s.objectField("to");
+    try s.write(to);
+    try s.objectField("cycle");
+    try s.write(cycle);
+    try s.objectField("generated");
+    try s.write(generated);
+    try s.endObject();
 }
 
-fn edgeKey(from: u32, to: u32) u64 {
-    return (@as(u64, from) << 32) | @as(u64, to);
-}
-
-fn writeFacadeNodes(w: *std.Io.Writer, h: *const Hierarchy, tops: []const u32) !void {
-    for (tops) |group_idx| {
-        const group = h.groups.items[group_idx];
-        const is_root = group_idx == root_group;
-        try w.print("  fg{d} [shape=box, ", .{group_idx});
-        if (!is_root and group.cycle_files > 0) {
-            try w.writeAll("style=\"rounded,filled\", fillcolor=\"#fbe9e7\", color=\"#d93025\", penwidth=1.6");
-        } else if (!is_root and group.file_count > 0 and group.generated_count == group.file_count) {
-            try w.writeAll("style=\"rounded,filled,dashed\", fillcolor=\"#f6f8fa\", color=\"#8c959f\"");
-        } else if (is_root) {
-            try w.writeAll("style=\"rounded,filled\", fillcolor=\"#eef2f7\", color=\"#8c959f\"");
-        } else {
-            try w.writeAll("style=\"rounded,filled\", fillcolor=\"#f3e8fd\", color=\"#8250df\"");
-        }
-        const count: u32 = if (is_root) @intCast(group.files.items.len) else group.file_count;
-        const kind = if (is_root) "root" else if (group.is_facade) "facade" else "module";
-        var suffix: []const u8 = "";
-        if (!is_root and group.cycle_files > 0) suffix = " · cycle";
-        if (!is_root and group.file_count > 0 and group.generated_count == group.file_count) suffix = " · generated";
-        const label = try std.fmt.allocPrint(h.gpa, "{s}\n{d} {s} · {s}{s}", .{
-            group.name,
-            count,
-            plural(count, "file", "files"),
-            kind,
-            suffix,
-        });
-        try w.writeAll(", label=");
-        try dotStr(w, label);
-        try w.writeAll(", tooltip=");
-        try dotStr(w, if (is_root) "files at the repository root" else group.path);
-        try w.writeAll("];\n");
-    }
-}
-
-fn writeFacadeEdges(
-    w: *std.Io.Writer,
-    h: *const Hierarchy,
-    tops: []const u32,
-    edges: *const std.AutoHashMapUnmanaged(u64, EdgeStats),
-) !void {
-    for (tops) |from| {
-        for (tops) |to| {
-            if (from == to) continue;
-            const stats = edges.get(edgeKey(from, to)) orelse continue;
-            try w.print("  fg{d} -> fg{d} [", .{ from, to });
-            try writeAggregateAttrs(w, h, from, to, stats);
-            try w.writeAll("];\n");
+fn writePayloadExternalEdges(s: *std.json.Stringify, model_ptr: *const Model, h: *const Hierarchy, externals: *const Externals) !void {
+    try s.beginArray();
+    for (model_ptr.files.items, 0..) |file, file_idx| {
+        if (!h.file_visible[file_idx]) continue;
+        for (file.imports.items) |imp| {
+            if (imp.excluded or imp.resolved != null) continue;
+            if (Model.isExternalImport(imp.raw)) continue;
+            const ext_id = externals.id(imp.raw) orelse continue;
+            try s.beginObject();
+            try s.objectField("from");
+            try s.write(@as(u32, @intCast(file_idx)));
+            try s.objectField("to");
+            try s.write(ext_id);
+            try s.endObject();
         }
     }
-}
-
-fn writeFacadeExternalEdges(
-    w: *std.Io.Writer,
-    h: *const Hierarchy,
-    tops: []const u32,
-    externals: *const Externals,
-    edges: *const std.AutoHashMapUnmanaged(u64, EdgeStats),
-) !void {
-    for (tops) |from| {
-        for (externals.names.items, 0..) |name, ext_idx| {
-            const stats = edges.get(edgeKey(from, @intCast(ext_idx))) orelse continue;
-            try w.print("  fg{d} -> ext{d} [style=dashed, color=\"#e37400\", tooltip=", .{ from, ext_idx });
-            const tip = try std.fmt.allocPrint(h.gpa, "{s} → {s}: {d} imports", .{
-                h.groups.items[from].name,
-                name,
-                stats.count,
-            });
-            try dotStr(w, tip);
-            if (stats.count > 1) {
-                try w.writeAll(", label=");
-                const label = try std.fmt.allocPrint(h.gpa, "{d}", .{stats.count});
-                try dotStr(w, label);
-            }
-            try w.writeAll("];\n");
-        }
-    }
-}
-
-fn writeAggregateAttrs(
-    w: *std.Io.Writer,
-    h: *const Hierarchy,
-    from: u32,
-    to: u32,
-    stats: EdgeStats,
-) !void {
-    const styled = try writeAggregateStyle(w, stats);
-    if (styled) try w.writeAll(", ");
-    if (stats.count > 1) {
-        try w.writeAll("label=");
-        const label = try std.fmt.allocPrint(h.gpa, "{d}", .{stats.count});
-        try dotStr(w, label);
-        try w.writeAll(", ");
-    }
-    try w.writeAll("tooltip=");
-    const tip = try std.fmt.allocPrint(h.gpa, "{s} → {s}: {d} imports, {d} cyclic", .{
-        h.groups.items[from].name,
-        h.groups.items[to].name,
-        stats.count,
-        stats.cycle,
-    });
-    try dotStr(w, tip);
-}
-
-fn writeAggregateStyle(w: *std.Io.Writer, stats: EdgeStats) !bool {
-    if (stats.cycle > 0) {
-        try w.writeAll("color=\"#d93025\", penwidth=1.6");
-        return true;
-    }
-    if (stats.count > 0 and stats.generated == stats.count) {
-        try w.writeAll("style=dashed, color=\"#8c959f\"");
-        return true;
-    }
-    return false;
+    try s.endArray();
 }
 
 const Externals = struct {
@@ -572,10 +649,11 @@ const Externals = struct {
     names: std.ArrayListUnmanaged([]const u8) = .empty,
     by_name: std.StringHashMapUnmanaged(u32) = .empty,
 
-    fn collect(gpa: Gpa, model_ptr: *const Model) !Externals {
+    fn collect(gpa: Gpa, model_ptr: *const Model, h: *const Hierarchy) !Externals {
         var externals = Externals{ .gpa = gpa };
         errdefer externals.deinit();
-        for (model_ptr.files.items) |file| {
+        for (model_ptr.files.items, 0..) |file, file_idx| {
+            if (!h.file_visible[file_idx]) continue;
             for (file.imports.items) |imp| {
                 if (imp.excluded or imp.resolved != null) continue;
                 if (Model.isExternalImport(imp.raw)) continue;
@@ -641,8 +719,9 @@ test "facade grouping follows module and submodule directories" {
     };
     const generated: [paths.len]bool = @splat(false);
     const cycles: [paths.len]bool = @splat(false);
+    const visible: [paths.len]bool = @splat(true);
 
-    var h = try buildPaths(std.testing.allocator, &paths, &generated, &cycles);
+    var h = try buildPaths(std.testing.allocator, &paths, &generated, &cycles, &visible);
     defer h.deinit();
 
     const codegen = h.groupOfFile(1);
@@ -662,7 +741,26 @@ test "facade grouping follows module and submodule directories" {
     try std.testing.expectEqualStrings("customworkflows", h.groups.items[h.groupOfFile(8)].path);
     try std.testing.expectEqualStrings("cli", h.groups.items[h.groupOfFile(9)].path);
     try std.testing.expectEqualStrings("proto_gen", h.groups.items[h.groupOfFile(10)].path);
-    try std.testing.expectEqual(h.groupOfFile(3), h.topGroupOfFile(6));
+}
+
+test "graph exclusions keep analysis but hide files from the graph" {
+    const paths = [_][]const u8{
+        "src/main.zig",
+        "src/unit_tests.zig",
+        "src/codegen.zig",
+        "src/codegen/emit.zig",
+    };
+    const generated: [paths.len]bool = @splat(false);
+    const cycles: [paths.len]bool = @splat(false);
+    const visible = [_]bool{ true, false, true, true };
+
+    var h = try buildPaths(std.testing.allocator, &paths, &generated, &cycles, &visible);
+    defer h.deinit();
+
+    try std.testing.expect(!h.isVisible(1));
+    try std.testing.expect(h.isVisible(0));
+    try std.testing.expectEqual(@as(u32, 1), h.groups.items[h.groupOfFile(0)].file_count);
+    try std.testing.expectEqual(@as(u32, 2), h.groups.items[h.groupOfFile(2)].file_count);
 }
 
 test "detailed graph nests submodules inside facades" {
@@ -696,7 +794,31 @@ test "detailed graph nests submodules inside facades" {
     try std.testing.expect(std.mem.indexOf(u8, dot, "label=\"graph.zig\"") != null);
 }
 
-test "facade graph aggregates cross-module imports" {
+test "parse graphviz plain layout" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const plain =
+        \\graph 1 10 5
+        \\node f0 2 4 1 0.5 "a.zig" rounded,filled box #8250df #f3e8fd
+        \\node ext0 8 2 0.5 0.5 "mod" dashed filled note #e37400 #fff3cd
+        \\stop
+    ;
+    var layout = try parsePlain(alloc, plain);
+    defer layout.deinit();
+
+    const file = layout.fileBox(0).?;
+    try std.testing.expectApproxEqAbs(@as(f64, 108), file.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f64, 54), file.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f64, 72), file.w, 0.01);
+
+    const ext = layout.externalBox(0).?;
+    try std.testing.expectApproxEqAbs(@as(f64, 558), ext.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f64, 198), ext.y, 0.01);
+}
+
+test "payload embeds hierarchy and visible edges" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -709,19 +831,22 @@ test "facade graph aggregates cross-module imports" {
     };
     _ = try m.addFile("src/a.zig", "");
     _ = try m.addFile("src/a/one.zig", "");
-    _ = try m.addFile("src/b.zig", "");
-    try m.files.items[0].imports.append(alloc, .{ .raw = "../b.zig", .line = 3, .resolved = 2 });
-    try m.files.items[1].imports.append(alloc, .{ .raw = "../b.zig", .line = 4, .resolved = 2 });
+    _ = try m.addFile("src/unit_tests.zig", "");
+    try m.config.graph_exclude.append(alloc, "src/unit_tests.zig");
+    try m.files.items[0].imports.append(alloc, .{ .raw = "a/one.zig", .line = 2, .resolved = 1 });
 
     var h = try build(&m);
     defer h.deinit();
+    var layout = Layout.empty(alloc);
+    defer layout.deinit();
 
     var aw = std.Io.Writer.Allocating.init(alloc);
     defer aw.deinit();
-    try writeFacades(&aw.writer, &m, &h);
-    const dot = aw.written();
+    try writePayload(&aw.writer, &m, &h, &layout);
+    const json = aw.written();
 
-    try std.testing.expect(std.mem.indexOf(u8, dot, "digraph facades") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dot, "label=\"a\\n2 files · facade\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dot, "label=\"2\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"groups\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"nodes\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "src/unit_tests.zig") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"from\":0") != null);
 }
