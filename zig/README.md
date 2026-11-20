@@ -238,16 +238,24 @@ rule's severity (`error`, `warning`, `note`). Unknown IDs are rejected.
 `module-cycle` aggregates resolved imports between top-level facades/modules and
 reports SCC cycles such as `editor, workflowlower`. It is advisory by default:
 use `"warning"` plus a weight to add debt without failing `--check`. Root files,
-generated files, and files hidden by `graph.exclude` do not participate. The
-suppression key is the sorted module list, for example `editor,workflowlower`.
+generated files, test-only imports, and files hidden by `graph.exclude` do not
+participate. The suppression key is the sorted module list, for example
+`editor,workflowlower`.
 
-`test-only-import` reports a file-scope aliased `@import` that resolves to a
-local `.zig` file when every alias reference is inside a `test` declaration. It
-skips imports declared inside tests, direct `_ = @import("...")` forms, external
-imports, generated files, and test roots. `test_roots` adds project-specific
-test roots to the built-in `src/unit_tests.zig`, `src/integration_tests.zig`,
-and `customworkflows/generated.zig` defaults; entries accept glob patterns. The
-finding key is `<file>:<alias>`.
+`test-only-import` rejects test-only dependency edges. An `@import` declared
+inside a named `test` block is always reported, including direct
+`_ = @import("...")` forms and imports in test roots: move the test to the
+module that already owns the dependency, or to an integration test. Unnamed
+`test { ... }` registration blocks are exempt, so test roots can keep importing
+test files there. A file-scope aliased import that resolves to a local `.zig`
+file is reported when every alias reference is inside a `test` declaration,
+except in `test_roots`. Public `pub const` re-exports are facade API and stay exempt.
+`test_roots` adds project-specific test roots to the built-in
+`src/unit_tests.zig`, `src/integration_tests.zig`, and
+`customworkflows/generated.zig` defaults; entries accept glob patterns.
+Generated files are skipped. The finding key is `<file>:<alias>`, or
+`<file>:<raw>` for a direct import. Test-only imports do not contribute to
+`module-cycle` edges.
 
 `suppressions` entries require `rule`, `key`, and `reason`. The key is the
 stable identity of the finding: sorted cycle members for cycles, the function

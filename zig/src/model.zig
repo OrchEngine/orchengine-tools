@@ -142,16 +142,26 @@ pub const Import = struct {
     raw: []const u8,
     alias: ?[]const u8 = null,
     line: u32,
-    /// Byte offset of the alias token, used to tell whether the import itself
-    /// lives inside a test declaration.
-    alias_start: u32 = 0,
+    /// Byte offset of the `@import` call, used to tell whether the declaration
+    /// itself lives inside a test.
+    offset: u32 = 0,
     /// Alias references inside and outside test declarations.
     test_refs: u32 = 0,
     prod_refs: u32 = 0,
-    /// The import declaration is nested inside a test.
+    /// The import declaration is nested inside a named test.
     in_test: bool = false,
+    /// The import is part of a public facade re-export.
+    exported: bool = false,
     resolved: ?u32 = null,
     excluded: bool = false,
+
+    /// The declaration is inside a named test, or it is only referenced from
+    /// tests. Public re-exports are facade API, not test-only usage.
+    pub fn isTestOnly(self: Import) bool {
+        if (self.in_test) return true;
+        if (self.exported) return false;
+        return self.alias != null and self.test_refs > 0 and self.prod_refs == 0;
+    }
 };
 
 pub const Call = struct {
