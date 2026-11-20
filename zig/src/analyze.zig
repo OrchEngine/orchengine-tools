@@ -1,5 +1,6 @@
 const std = @import("std");
 const model = @import("model.zig");
+const graph = @import("graph.zig");
 
 const Model = model.Model;
 const Gpa = model.Gpa;
@@ -9,7 +10,9 @@ pub fn run(model_ptr: *Model) !void {
     try buildIndices(model_ptr);
     if (model_ptr.config.track_capabilities) computeCapabilities(model_ptr);
     try findCycles(model_ptr);
+    try findModuleCycles(model_ptr);
     try addImportCycleFindings(model_ptr);
+    try addModuleCycleFindings(model_ptr);
     try addCallCycleFindings(model_ptr);
     try addUncalledPrivateFindings(model_ptr);
     try addTestOnlyImportFindings(model_ptr);
@@ -393,8 +396,53 @@ fn findCycles(model_ptr: *Model) !void {
     }
 }
 
+fn findModuleCycles(model_ptr: *Model) !void {
+    var hierarchy = try graph.build(model_ptr);
+    defer hierarchy.deinit();
+    const cycles = try graph.detectModuleCycles(model_ptr.gpa, model_ptr, &hierarchy);
+    try model_ptr.module_cycles.appendSlice(model_ptr.gpa, cycles);
+}
+
 // ---------------------------------------------------------------------------
 // Project findings
+
+fn addModuleCycleFindings(model_ptr: *Model) !void {
+    const gpa = model_ptr.gpa;
+    const severity = model_ptr.projectSeverity("module-cycle");
+    for (model_ptr.module_cycles.items) |cycle| {
+        if (cycle.modules.len == 0) continue;
+        try model_ptr.findings.append(gpa, .{
+            .rule_id = "module-cycle",
+            .severity = severity,
+            .message = try moduleCycleMessage(model_ptr, cycle),
+            .path = cycle.path,
+            .line = cycle.line,
+            .source = .project,
+            .weight = model_ptr.findingWeight("module-cycle", severity),
+            .key = try moduleCycleKey(model_ptr, cycle),
+        });
+    }
+}
+
+fn moduleCycleKey(model_ptr: *Model, cycle: model.ModuleCycle) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (cycle.modules, 0..) |module_path, i| {
+        if (i != 0) try out.append(model_ptr.gpa, ',');
+        try out.appendSlice(model_ptr.gpa, module_path);
+    }
+    return out.toOwnedSlice(model_ptr.gpa);
+}
+
+fn moduleCycleMessage(model_ptr: *Model, cycle: model.ModuleCycle) ![]const u8 {
+    var aw = std.Io.Writer.Allocating.init(model_ptr.gpa);
+    defer aw.deinit();
+    try aw.writer.writeAll("module cycle: ");
+    for (cycle.modules, 0..) |module_path, i| {
+        if (i != 0) try aw.writer.writeAll(", ");
+        try aw.writer.writeAll(module_path);
+    }
+    return model_ptr.gpa.dupe(u8, aw.written());
+}
 
 fn addImportCycleFindings(model_ptr: *Model) !void {
     const gpa = model_ptr.gpa;
@@ -922,6 +970,50 @@ test "import cycle finding and suppression" {
     try std.testing.expectEqual(@as(u32, 0), m.total_debt);
 }
 
+test "module cycle finding is advisory debt and suppressible" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    const a = try m.addFile("src/a.zig", "");
+    _ = try m.addFile("src/a/one.zig", "");
+    const b = try m.addFile("src/b.zig", "");
+    _ = try m.addFile("src/b/one.zig", "");
+    try m.files.items[a].imports.append(alloc, .{ .raw = "b/one.zig", .line = 3, .resolved = 3 });
+    try m.files.items[b].imports.append(alloc, .{ .raw = "a/one.zig", .line = 4, .resolved = 1 });
+
+    try findModuleCycles(&m);
+    try addModuleCycleFindings(&m);
+    computeDebt(&m);
+
+    try std.testing.expectEqual(@as(usize, 1), m.module_cycles.items.len);
+    try std.testing.expectEqual(@as(usize, 1), m.findings.items.len);
+    const finding = m.findings.items[0];
+    try std.testing.expectEqualStrings("module-cycle", finding.rule_id);
+    try std.testing.expectEqual(model.Severity.warning, finding.severity);
+    try std.testing.expectEqualStrings("a,b", finding.key.?);
+    try std.testing.expectEqualStrings("module cycle: a, b", finding.message);
+    try std.testing.expectEqual(@as(u32, 1), m.total_debt);
+    try std.testing.expectEqual(@as(u32, 1), m.project_debt);
+
+    try m.config.suppressions.append(alloc, .{
+        .rule_id = "module-cycle",
+        .key = "a,b",
+        .reason = "facade split planned",
+    });
+    m.applySuppressions();
+    computeDebt(&m);
+
+    try std.testing.expect(m.findings.items[0].suppressed);
+    try std.testing.expectEqual(@as(u32, 0), m.total_debt);
+}
+
 test "call cycle finding and suppression" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -962,8 +1054,8 @@ test "call cycle finding and suppression" {
         .is_pub = false,
         .has_doc = true,
     });
-    try m.calls.append(alloc, .{ .name = "g", .line = 2, .caller = 0, .resolved = 1 });
-    try m.calls.append(alloc, .{ .name = "f", .line = 6, .caller = 1, .resolved = 0 });
+    try m.calls.append(alloc, .{ .name = "g", .receiver = null, .line = 2, .caller = 0, .resolved = 1 });
+    try m.calls.append(alloc, .{ .name = "f", .receiver = null, .line = 6, .caller = 1, .resolved = 0 });
     try m.fns.items[0].call_sites.append(alloc, 0);
     try m.fns.items[1].call_sites.append(alloc, 1);
 

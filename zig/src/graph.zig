@@ -53,6 +53,20 @@ pub const Hierarchy = struct {
     pub fn isVisible(self: *const Hierarchy, file_idx: u32) bool {
         return self.file_visible[file_idx];
     }
+
+    /// The top-level module that owns a group. Root files stay in the root.
+    pub fn topGroup(self: *const Hierarchy, group_idx: u32) u32 {
+        var current = group_idx;
+        while (self.groups.items[current].parent) |parent| {
+            if (parent == root_group) break;
+            current = parent;
+        }
+        return current;
+    }
+
+    pub fn topGroupOfFile(self: *const Hierarchy, file_idx: u32) u32 {
+        return self.topGroup(self.groupOfFile(file_idx));
+    }
 };
 
 pub fn build(model_ptr: *const Model) !Hierarchy {
@@ -244,6 +258,172 @@ fn isFacadeFile(self: *const Hierarchy, group_idx: u32, file_idx: u32) bool {
     const base = std.fs.path.basename(self.file_paths[file_idx]);
     if (!std.mem.endsWith(u8, base, ".zig")) return false;
     return std.mem.eql(u8, base[0 .. base.len - 4], group.name);
+}
+
+const ModuleEdge = struct {
+    from: u32,
+    to: u32,
+    file: u32,
+    line: u32,
+    count: u32 = 0,
+};
+
+const ModuleTarjan = struct {
+    gpa: Gpa,
+    adjacency: []const std.ArrayListUnmanaged(u32),
+    index: []i32,
+    low: []u32,
+    on_stack: []bool,
+    stack: std.ArrayListUnmanaged(u32) = .empty,
+    next_index: u32 = 0,
+    components: *std.ArrayListUnmanaged([]u32),
+};
+
+fn moduleStrongconnect(t: *ModuleTarjan, v: u32) !void {
+    t.index[v] = @intCast(t.next_index);
+    t.low[v] = t.next_index;
+    t.next_index += 1;
+    try t.stack.append(t.gpa, v);
+    t.on_stack[v] = true;
+
+    for (t.adjacency[v].items) |w| {
+        if (t.index[w] < 0) {
+            try moduleStrongconnect(t, w);
+            t.low[v] = @min(t.low[v], t.low[w]);
+        } else if (t.on_stack[w]) {
+            t.low[v] = @min(t.low[v], @as(u32, @intCast(t.index[w])));
+        }
+    }
+
+    if (t.low[v] == @as(u32, @intCast(t.index[v]))) {
+        var component: std.ArrayListUnmanaged(u32) = .empty;
+        defer component.deinit(t.gpa);
+        while (true) {
+            const w = t.stack.pop().?;
+            t.on_stack[w] = false;
+            try component.append(t.gpa, w);
+            if (w == v) break;
+        }
+        if (component.items.len > 1) {
+            try t.components.append(t.gpa, try component.toOwnedSlice(t.gpa));
+        }
+    }
+}
+
+/// Detect cycles between top-level facade/module groups. Root files and
+/// generated files are excluded; caller-supplied graph exclusions are honored.
+pub fn detectModuleCycles(gpa: Gpa, model_ptr: *const Model, h: *const Hierarchy) ![]model.ModuleCycle {
+    var adjacency = try gpa.alloc(std.ArrayListUnmanaged(u32), h.groups.items.len);
+    defer {
+        for (adjacency) |*list| list.deinit(gpa);
+        gpa.free(adjacency);
+    }
+    for (adjacency) |*list| list.* = .empty;
+
+    var edges: std.AutoHashMapUnmanaged(u64, ModuleEdge) = .empty;
+    defer edges.deinit(gpa);
+    for (model_ptr.files.items, 0..) |file, file_idx| {
+        if (!h.file_visible[file_idx] or file.generated) continue;
+        const from = h.topGroupOfFile(@intCast(file_idx));
+        if (from == root_group) continue;
+        for (file.imports.items) |imp| {
+            if (imp.excluded) continue;
+            const target = imp.resolved orelse continue;
+            if (!h.file_visible[target] or model_ptr.files.items[target].generated) continue;
+            const to = h.topGroupOfFile(target);
+            if (to == root_group or to == from) continue;
+
+            const key = (@as(u64, from) << 32) | @as(u64, to);
+            const gop = try edges.getOrPut(gpa, key);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{
+                    .from = from,
+                    .to = to,
+                    .file = @intCast(file_idx),
+                    .line = imp.line,
+                };
+                try adjacency[from].append(gpa, to);
+            }
+            gop.value_ptr.count += 1;
+        }
+    }
+
+    const count = h.groups.items.len;
+    const index = try gpa.alloc(i32, count);
+    defer gpa.free(index);
+    const low = try gpa.alloc(u32, count);
+    defer gpa.free(low);
+    const on_stack = try gpa.alloc(bool, count);
+    defer gpa.free(on_stack);
+    @memset(index, -1);
+    @memset(on_stack, false);
+
+    var components: std.ArrayListUnmanaged([]u32) = .empty;
+    defer {
+        for (components.items) |component| gpa.free(component);
+        components.deinit(gpa);
+    }
+    var t = ModuleTarjan{
+        .gpa = gpa,
+        .adjacency = adjacency,
+        .index = index,
+        .low = low,
+        .on_stack = on_stack,
+        .components = &components,
+    };
+    defer t.stack.deinit(gpa);
+    for (0..count) |v| {
+        if (index[v] < 0) try moduleStrongconnect(&t, @intCast(v));
+    }
+
+    var cycles: std.ArrayListUnmanaged(model.ModuleCycle) = .empty;
+    errdefer cycles.deinit(gpa);
+    for (components.items) |component| {
+        try appendModuleCycle(gpa, model_ptr, h, &edges, component, &cycles);
+    }
+    return cycles.toOwnedSlice(gpa);
+}
+
+fn appendModuleCycle(
+    gpa: Gpa,
+    model_ptr: *const Model,
+    h: *const Hierarchy,
+    edges: *const std.AutoHashMapUnmanaged(u64, ModuleEdge),
+    component: []const u32,
+    cycles: *std.ArrayListUnmanaged(model.ModuleCycle),
+) !void {
+    var members: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    defer members.deinit(gpa);
+    for (component) |group_idx| try members.put(gpa, group_idx, {});
+
+    var best: ?ModuleEdge = null;
+    var it = edges.valueIterator();
+    while (it.next()) |edge| {
+        if (!members.contains(edge.from) or !members.contains(edge.to)) continue;
+        if (best == null or edge.from < best.?.from or
+            (edge.from == best.?.from and edge.to < best.?.to))
+        {
+            best = edge.*;
+        }
+    }
+    const representative = best orelse return;
+
+    const modules = try gpa.alloc([]const u8, component.len);
+    errdefer gpa.free(modules);
+    for (component, 0..) |group_idx, i| {
+        modules[i] = h.groups.items[group_idx].path;
+    }
+    std.mem.sort([]const u8, modules, {}, struct {
+        fn less(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.less);
+
+    try cycles.append(gpa, .{
+        .modules = modules,
+        .path = model_ptr.fileLabel(representative.file),
+        .line = representative.line,
+    });
 }
 
 pub fn writeDetailed(w: *std.Io.Writer, model_ptr: *const Model, h: *const Hierarchy) !void {
@@ -849,4 +1029,33 @@ test "payload embeds hierarchy and visible edges" {
     try std.testing.expect(std.mem.indexOf(u8, json, "\"nodes\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, json, "src/unit_tests.zig") == null);
     try std.testing.expect(std.mem.indexOf(u8, json, "\"from\":0") != null);
+}
+
+test "module cycles detect facade cycles without file cycles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = "",
+        .title = "test",
+        .settings = .{},
+    };
+    const a = try m.addFile("src/a.zig", "");
+    _ = try m.addFile("src/a/one.zig", "");
+    const b = try m.addFile("src/b.zig", "");
+    _ = try m.addFile("src/b/one.zig", "");
+    try m.files.items[a].imports.append(alloc, .{ .raw = "b/one.zig", .line = 3, .resolved = 3 });
+    try m.files.items[b].imports.append(alloc, .{ .raw = "a/one.zig", .line = 4, .resolved = 1 });
+
+    var hierarchy = try build(&m);
+    defer hierarchy.deinit();
+
+    const cycles = try detectModuleCycles(alloc, &m, &hierarchy);
+    try std.testing.expectEqual(@as(usize, 1), cycles.len);
+    try std.testing.expectEqual(@as(usize, 2), cycles[0].modules.len);
+    try std.testing.expectEqualStrings("a", cycles[0].modules[0]);
+    try std.testing.expectEqualStrings("b", cycles[0].modules[1]);
+    try std.testing.expect(cycles[0].line > 0);
 }
