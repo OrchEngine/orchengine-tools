@@ -7,6 +7,10 @@
 
     const NS = "http://www.w3.org/2000/svg";
     const ROOT = 0;
+    const PAD = 14;
+    const HEADER = 38;
+    const NODE_GAP = 20;
+    const RANK_GAP = 70;
     const groups = new Map();
     const files = new Map();
     const externals = new Map();
@@ -134,6 +138,10 @@
         const ordered = Array.from(groups.values()).sort(function (a, b) { return b.id - a.id; });
         ordered.forEach(function (group) {
             if (group.id === ROOT) return;
+            if (collapsed.has(group.id) && group.collapsedBox) {
+                group.bounds = group.collapsedBox;
+                return;
+            }
             let minX = Infinity;
             let minY = Infinity;
             let maxX = -Infinity;
@@ -153,25 +161,31 @@
                 group.bounds = null;
                 return;
             }
-            const pad = 14;
             group.bounds = {
-                x: minX - pad,
-                y: minY - 38,
-                w: maxX - minX + pad * 2,
-                h: maxY - minY + 38 + pad
+                x: minX - PAD,
+                y: minY - HEADER,
+                w: maxX - minX + PAD * 2,
+                h: maxY - minY + HEADER + PAD
             };
         });
     }
 
-    function summaryBox(group) {
-        if (!group.bounds) return null;
-        const w = Math.max(150, group.name.length * 7 + 54);
-        const h = 50;
+    function summarySize(group) {
         return {
-            x: group.bounds.x + (group.bounds.w - w) / 2,
-            y: group.bounds.y + (group.bounds.h - h) / 2,
-            w: w,
-            h: h
+            w: Math.max(150, group.name.length * 7 + 54),
+            h: 50
+        };
+    }
+
+    function summaryBox(group) {
+        if (group.collapsedBox) return group.collapsedBox;
+        if (!group.bounds) return null;
+        const size = summarySize(group);
+        return {
+            x: group.bounds.x + (group.bounds.w - size.w) / 2,
+            y: group.bounds.y + (group.bounds.h - size.h) / 2,
+            w: size.w,
+            h: size.h
         };
     }
 
@@ -257,25 +271,6 @@
         svg.setAttribute("viewBox", view.x + " " + view.y + " " + view.w + " " + view.h);
     }
 
-    function containerAspect() {
-        const rect = host.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) return rect.width / rect.height;
-        return 1.5;
-    }
-
-    function fitWidth() {
-        const box = contentBounds();
-        const pad = 60;
-        const aspect = containerAspect();
-        view = {
-            x: box.x - pad,
-            y: box.y - pad,
-            w: Math.max(120, box.w + pad * 2),
-            h: Math.max(120, box.w + pad * 2) / aspect
-        };
-        applyView();
-    }
-
     function fitAll() {
         const box = contentBounds();
         const rect = host.getBoundingClientRect();
@@ -288,6 +283,23 @@
             y: box.y + box.h / 2 - ch / scale / 2,
             w: cw / scale,
             h: ch / scale
+        };
+        applyView();
+    }
+
+    function fitHeight() {
+        const box = contentBounds();
+        const rect = host.getBoundingClientRect();
+        const pad = 60;
+        const cw = rect.width > 0 ? rect.width : 1200;
+        const ch = rect.height > 0 ? rect.height : 800;
+        const h = Math.max(120, box.h + pad * 2);
+        const w = h * (cw / ch);
+        view = {
+            x: w > box.w + pad * 2 ? box.x + box.w / 2 - w / 2 : box.x - pad,
+            y: box.y - pad,
+            w: w,
+            h: h
         };
         applyView();
     }
@@ -612,6 +624,263 @@
         layers.nodes.appendChild(group);
     }
 
+    function itemForFile(group, file, fileItems, groupItems) {
+        if (file.group === group.id) return fileItems.get(file.id);
+        let current = groups.get(file.group);
+        while (current && current.parent !== group.id) {
+            current = current.parent === null || current.parent === undefined ? null : groups.get(current.parent);
+        }
+        if (!current) return null;
+        return groupItems.get(current.id);
+    }
+
+    function buildItemEdges(group, items, fileItems, groupItems, externalItems) {
+        const map = new Map();
+        function add(from, to, cycle, generated, external) {
+            if (from === null || to === null || from === to) return;
+            const key = from + "|" + to;
+            let edge = map.get(key);
+            if (!edge) {
+                edge = { from: from, to: to, count: 0, cycle: false, generated: true, external: Boolean(external) };
+                map.set(key, edge);
+            }
+            edge.count += 1;
+            if (cycle) edge.cycle = true;
+            if (!generated) edge.generated = false;
+        }
+        data.edges.forEach(function (edge) {
+            const fromFile = files.get(edge.from);
+            const toFile = files.get(edge.to);
+            if (!fromFile || !toFile) return;
+            add(
+                itemForFile(group, fromFile, fileItems, groupItems),
+                itemForFile(group, toFile, fileItems, groupItems),
+                edge.cycle,
+                edge.generated,
+                false
+            );
+        });
+        if (group.id === ROOT) {
+            data.externalEdges.forEach(function (edge) {
+                const fromFile = files.get(edge.from);
+                if (!fromFile) return;
+                add(
+                    itemForFile(group, fromFile, fileItems, groupItems),
+                    externalItems.get(edge.to),
+                    false,
+                    false,
+                    true
+                );
+            });
+        }
+        return Array.from(map.values());
+    }
+
+    function layeredLayout(items, edges) {
+        const n = items.length;
+        if (n === 0) return;
+
+        const adjacency = Array.from({ length: n }, function () { return []; });
+        edges.forEach(function (edge, index) {
+            if (edge.from !== edge.to) adjacency[edge.from].push({ to: edge.to, index: index });
+        });
+
+        const state = new Array(n).fill(0);
+        const feedback = new Set();
+        function visit(node) {
+            state[node] = 1;
+            adjacency[node].forEach(function (link) {
+                if (state[link.to] === 0) {
+                    visit(link.to);
+                } else if (state[link.to] === 1) {
+                    feedback.add(link.index);
+                }
+            });
+            state[node] = 2;
+        }
+        for (let i = 0; i < n; i += 1) {
+            if (state[i] === 0) visit(i);
+        }
+
+        const forward = edges.filter(function (edge, index) {
+            return !feedback.has(index) && edge.from !== edge.to;
+        });
+        const out = Array.from({ length: n }, function () { return []; });
+        const indegree = new Array(n).fill(0);
+        forward.forEach(function (edge) {
+            out[edge.from].push(edge);
+            indegree[edge.to] += 1;
+        });
+
+        const queue = [];
+        for (let i = 0; i < n; i += 1) {
+            if (indegree[i] === 0) queue.push(i);
+        }
+        const rank = new Array(n).fill(0);
+        let head = 0;
+        while (head < queue.length) {
+            const node = queue[head];
+            head += 1;
+            out[node].forEach(function (edge) {
+                rank[edge.to] = Math.max(rank[edge.to], rank[node] + 1);
+                indegree[edge.to] -= 1;
+                if (indegree[edge.to] === 0) queue.push(edge.to);
+            });
+        }
+
+        const maxRank = rank.reduce(function (max, value) { return Math.max(max, value); }, 0);
+        const layerNodes = Array.from({ length: maxRank + 1 }, function () { return []; });
+        rank.forEach(function (value, node) { layerNodes[value].push(node); });
+
+        const position = new Array(n).fill(0);
+        layerNodes.forEach(function (layer) {
+            layer.forEach(function (node, index) { position[node] = index; });
+        });
+
+        const neighbors = Array.from({ length: n }, function () { return []; });
+        edges.forEach(function (edge) {
+            if (edge.from === edge.to) return;
+            neighbors[edge.from].push({ node: edge.to, weight: Math.max(1, edge.count) });
+            neighbors[edge.to].push({ node: edge.from, weight: Math.max(1, edge.count) });
+        });
+
+        function reorder(layerIndex, neighborRank) {
+            const layer = layerNodes[layerIndex];
+            const barycenter = new Map();
+            layer.forEach(function (node) {
+                let sum = 0;
+                let weight = 0;
+                neighbors[node].forEach(function (neighbor) {
+                    if (rank[neighbor.node] !== neighborRank) return;
+                    sum += position[neighbor.node] * neighbor.weight;
+                    weight += neighbor.weight;
+                });
+                barycenter.set(node, weight > 0 ? sum / weight : position[node]);
+            });
+            layer.sort(function (a, b) {
+                const delta = barycenter.get(a) - barycenter.get(b);
+                if (delta !== 0) return delta;
+                return position[a] - position[b];
+            });
+            layer.forEach(function (node, index) { position[node] = index; });
+        }
+
+        for (let iteration = 0; iteration < 8; iteration += 1) {
+            for (let r = 1; r < layerNodes.length; r += 1) reorder(r, r - 1);
+            for (let r = layerNodes.length - 2; r >= 0; r -= 1) reorder(r, r + 1);
+        }
+
+        const rankWidths = layerNodes.map(function (layer) {
+            return layer.reduce(function (max, node) { return Math.max(max, items[node].w); }, 0);
+        });
+        const rankX = [];
+        let x = 0;
+        rankWidths.forEach(function (width, r) {
+            rankX[r] = x;
+            x += width + RANK_GAP;
+        });
+        const rankHeights = layerNodes.map(function (layer) {
+            return layer.reduce(function (sum, node, index) {
+                return sum + items[node].h + (index === 0 ? 0 : NODE_GAP);
+            }, 0);
+        });
+        const maxHeight = rankHeights.reduce(function (max, value) { return Math.max(max, value); }, 0);
+        layerNodes.forEach(function (layer, r) {
+            let y = (maxHeight - rankHeights[r]) / 2;
+            layer.forEach(function (node) {
+                const item = items[node];
+                item.x = rankX[r] + (rankWidths[r] - item.w) / 2;
+                item.y = y;
+                y += item.h + NODE_GAP;
+            });
+        });
+    }
+
+    function measureGroup(group) {
+        if (group.id !== ROOT && collapsed.has(group.id)) {
+            const size = summarySize(group);
+            group.measuredW = size.w;
+            group.measuredH = size.h;
+            group.layoutItems = null;
+            return;
+        }
+
+        const items = [];
+        const fileItems = new Map();
+        const groupItems = new Map();
+        const externalItems = new Map();
+        group.directFiles.forEach(function (file) {
+            const index = items.length;
+            items.push({ kind: "file", file: file, w: file.w, h: file.h });
+            fileItems.set(file.id, index);
+        });
+        group.children.forEach(function (child) {
+            if (child.fileCount === 0) return;
+            measureGroup(child);
+            const index = items.length;
+            items.push({ kind: "group", group: child, w: child.measuredW, h: child.measuredH });
+            groupItems.set(child.id, index);
+        });
+        if (group.id === ROOT) {
+            externals.forEach(function (node) {
+                const index = items.length;
+                items.push({ kind: "external", node: node, w: node.w, h: node.h });
+                externalItems.set(node.id, index);
+            });
+        }
+
+        const edges = buildItemEdges(group, items, fileItems, groupItems, externalItems);
+        layeredLayout(items, edges);
+
+        let maxX = 0;
+        let maxY = 0;
+        items.forEach(function (item) {
+            maxX = Math.max(maxX, item.x + item.w);
+            maxY = Math.max(maxY, item.y + item.h);
+        });
+        group.layoutItems = items;
+        group.measuredW = group.id === ROOT ? maxX : maxX + PAD * 2;
+        group.measuredH = group.id === ROOT ? maxY : maxY + HEADER + PAD;
+    }
+
+    function placeGroup(group, absX, absY) {
+        if (group.id !== ROOT && collapsed.has(group.id)) {
+            const box = { x: absX, y: absY, w: group.measuredW, h: group.measuredH };
+            group.collapsedBox = box;
+            group.bounds = box;
+            return;
+        }
+
+        group.collapsedBox = null;
+        if (group.id !== ROOT) {
+            group.bounds = { x: absX, y: absY, w: group.measuredW, h: group.measuredH };
+        }
+        const contentX = group.id === ROOT ? absX : absX + PAD;
+        const contentY = group.id === ROOT ? absY : absY + HEADER;
+        (group.layoutItems || []).forEach(function (item) {
+            if (item.kind === "file") {
+                item.file.x = contentX + item.x;
+                item.file.y = contentY + item.y;
+            } else if (item.kind === "group") {
+                placeGroup(item.group, contentX + item.x, contentY + item.y);
+            } else if (item.kind === "external") {
+                item.node.x = contentX + item.x;
+                item.node.y = contentY + item.y;
+            }
+        });
+    }
+
+    function autoLayout(fitAllMode) {
+        measureGroup(groups.get(ROOT));
+        placeGroup(groups.get(ROOT), 0, 0);
+        render();
+        if (fitAllMode) {
+            fitAll();
+        } else {
+            fitHeight();
+        }
+    }
+
     function render() {
         ensureSvg();
         updateBounds();
@@ -643,7 +912,7 @@
         } else {
             collapsed.add(id);
         }
-        render();
+        autoLayout(false);
     }
 
     function allGroups() {
@@ -666,8 +935,12 @@
             node.y = start.y;
         });
         collapsed.clear();
+        groups.forEach(function (group) {
+            group.collapsedBox = null;
+            group.layoutItems = null;
+        });
         render();
-        fitWidth();
+        fitHeight();
     }
 
     function startDrag(target, event) {
@@ -683,7 +956,12 @@
             if (node) entry.externals.push({ node: node, x: node.x, y: node.y });
         } else if (kind === "group") {
             const group = groups.get(id);
-            if (group) groupFiles(group).forEach(function (file) { entry.files.push({ node: file, x: file.x, y: file.y }); });
+            if (group && collapsed.has(id) && group.collapsedBox) {
+                entry.collapsedGroup = group;
+                entry.collapsedStart = { x: group.collapsedBox.x, y: group.collapsedBox.y };
+            } else if (group) {
+                groupFiles(group).forEach(function (file) { entry.files.push({ node: file, x: file.x, y: file.y }); });
+            }
         }
         return entry;
     }
@@ -718,6 +996,15 @@
                 entry.node.x = entry.x + dx;
                 entry.node.y = entry.y + dy;
             });
+            if (drag.collapsedGroup) {
+                drag.collapsedGroup.collapsedBox = {
+                    x: drag.collapsedStart.x + dx,
+                    y: drag.collapsedStart.y + dy,
+                    w: drag.collapsedGroup.measuredW,
+                    h: drag.collapsedGroup.measuredH
+                };
+                drag.collapsedGroup.bounds = drag.collapsedGroup.collapsedBox;
+            }
             scheduleRender();
             return;
         }
@@ -760,16 +1047,16 @@
             zoomAt(cx, cy, action === "zoom-in" ? 0.72 : 1.38);
         } else if (action === "fit") {
             fitAll();
+        } else if (action === "layout") {
+            autoLayout(false);
         } else if (action === "reset") {
             resetLayout();
         } else if (action === "collapse") {
             allGroups().forEach(function (group) { collapsed.add(group.id); });
-            render();
-            fitAll();
+            autoLayout(true);
         } else if (action === "expand") {
             collapsed.clear();
-            render();
-            fitWidth();
+            autoLayout(false);
         }
     }
 
@@ -782,6 +1069,5 @@
         });
     }
 
-    render();
-    fitWidth();
+    autoLayout(false);
 })();

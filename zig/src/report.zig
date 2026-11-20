@@ -823,7 +823,7 @@ fn writeHtml(
 
     // Graphs.
     try w.writeAll("<section id=\"dependency-graph\"><h2>Dependency graph</h2>\n");
-    try w.writeAll("<p class=\"muted\">Files are grouped inside their facade and submodule containers. Click a container header to collapse or expand it, drag nodes to arrange the graph, and use the wheel to zoom.</p>\n");
+    try w.writeAll("<p class=\"muted\">Files are grouped inside their facade and submodule containers. Auto layout ranks dependencies left to right; import cycles appear as red feedback edges. Click a container header to collapse or expand it, drag nodes to arrange the graph, and use the wheel to zoom.</p>\n");
     try w.writeAll("<p class=\"graph-links\"><a href=\"imports.dot\">imports.dot</a>");
     if (imports_rendered) try w.writeAll("<a href=\"imports.svg\">static imports.svg</a>");
     try w.writeAll("</p>\n");
@@ -840,11 +840,12 @@ fn writeHtml(
     try w.writeAll("<div class=\"graph-shell\"><div class=\"graph-tools\">\n");
     try w.writeAll("<button type=\"button\" data-graph-command=\"zoom-out\" title=\"Zoom out\">&minus;</button>\n");
     try w.writeAll("<button type=\"button\" data-graph-command=\"zoom-in\" title=\"Zoom in\">+</button>\n");
+    try w.writeAll("<button type=\"button\" data-graph-command=\"layout\" title=\"Lay out imports left to right\">Auto layout</button>\n");
     try w.writeAll("<button type=\"button\" data-graph-command=\"fit\" title=\"Fit all visible nodes\">Fit</button>\n");
-    try w.writeAll("<button type=\"button\" data-graph-command=\"reset\" title=\"Reset layout and zoom\">Reset</button>\n");
+    try w.writeAll("<button type=\"button\" data-graph-command=\"reset\" title=\"Reset to Graphviz positions\">Reset</button>\n");
     try w.writeAll("<button type=\"button\" data-graph-command=\"collapse\" title=\"Collapse every facade\">Collapse all</button>\n");
     try w.writeAll("<button type=\"button\" data-graph-command=\"expand\" title=\"Expand every facade\">Expand all</button>\n");
-    try w.writeAll("<span class=\"hint\">Click a facade header to collapse · drag nodes to arrange · wheel to zoom</span>\n");
+    try w.writeAll("<span class=\"hint\">Auto layout flows left to right · click a facade header to collapse · drag nodes to arrange · wheel to zoom</span>\n");
     try w.writeAll("</div><div class=\"graph graph-interactive\" data-dependency-graph></div></div>\n");
     try w.writeAll("<p class=\"muted\">Red = import cycle, dashed gray = generated target, dashed amber = unresolved module import. Edge labels count aggregated imports when containers are collapsed.</p>\n");
     try w.writeAll("</section>\n<section><h2>Call graph</h2>\n<p class=\"graph-links\"><a href=\"calls.svg\">calls.svg</a><a href=\"calls.dot\">calls.dot</a></p>\n<p class=\"muted\">Top functions by debt, plus every recursion and call-stack node. Red = recursion, amber = high debt.</p>\n");
