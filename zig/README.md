@@ -260,12 +260,14 @@ Output:
 The dependency hierarchy follows the repository convention: `src/<module>.zig`
 is a facade, `src/<module>/` contains its internals, and a directory such as
 `src/editor/graph/` becomes a submodule inside `editor` when `graph.zig` exists.
-Facades and submodules are collapsible containers. Dragging a file node moves
-only that file; dragging a container header moves the whole subtree. Edges are
-redrawn while dragging and aggregated when a container is collapsed. Use the
-wheel to zoom, the controls to fit/reset/collapse/expand, and `graph.exclude` to
-keep noisy files such as test roots out of the dependency view without removing
-them from analysis. `--no-graph` still writes every `.dot` file.
+Facades and submodules are collapsible containers. Auto layout ranks
+dependencies left to right; cycle-closing edges remain visible as feedback.
+Dragging a file node moves only that file; dragging a container header moves the
+whole subtree. Edges are redrawn while dragging and aggregated when a container
+is collapsed. Use the wheel to zoom, the controls to fit/reset/collapse/expand,
+and `graph.exclude` to keep noisy files such as test roots out of the dependency
+view without removing them from analysis. `--no-graph` still writes every
+`.dot` file.
 
 ### What it extracts
 
@@ -329,9 +331,10 @@ These are configurable estimates, not measurements.
   `src/<name>/`; nested submodules require a matching `<dir>/<name>.zig` facade
   file. Directories without that facade are rolled up into their parent module,
   so generated paths do not create artificial singleton submodules.
-- The interactive graph seeds node positions from `dot -Tplain`. Collapsing a
-  container does not reflow the rest of the graph; drag nodes or use `Fit` to
-  arrange the view.
+- Auto layout breaks import cycles, ranks the remaining graph, and orders nodes
+  within each rank to reduce crossings. That is best-effort: crossings remain
+  possible, and feedback edges are kept visible. `Reset` restores the original
+  Graphviz positions.
 - Import cycles are legal in Zig (`@import` is lazy); the report highlights
   them as architectural coupling, not as compiler errors.
 - Capability detection is heuristic: allocator/Io stored in a struct field is
