@@ -82,7 +82,7 @@ const NoDeprecated = @This();
 pub const meta: Rule.Meta = .{
     .name = "no-deprecated",
     .category = .suspicious,
-    .default = .warning,
+    .default = .off,
 };
 
 const Deprecation = struct {
