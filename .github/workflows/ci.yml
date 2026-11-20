@@ -21,8 +21,9 @@ jobs:
       - run: cd zig && zig fmt --check build.zig src/*.zig zlint_rules/*.zig
       - run: cd zig && zig build -Doptimize=ReleaseSafe
       - run: cd zig && zig build test
+      - run: cd zig && ./zlint-rules-test
       - run: cd zig && ./zig-out/bin/orche --help
       - name: ShellCheck
         run: |
           command -v shellcheck >/dev/null || { sudo apt-get update; sudo apt-get install -y shellcheck; }
-          shellcheck zig/tasks/*.sh zig/zlint-download zig/zlint-src zig/zlint-release zig/zlint-rules-build zig/zlint-rules-parity
+          shellcheck zig/tasks/*.sh zig/zlint-download zig/zlint-src zig/zlint-release zig/zlint-rules-build zig/zlint-rules-parity zig/zlint-rules-test
