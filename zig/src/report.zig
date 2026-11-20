@@ -3,6 +3,8 @@ const Io = std.Io;
 const model = @import("model.zig");
 const graph = @import("graph.zig");
 
+const graph_view_js = @embedFile("graph_view.js");
+
 const Model = model.Model;
 const Gpa = model.Gpa;
 
@@ -10,14 +12,11 @@ pub const Paths = struct {
     html: []const u8,
     imports_dot: []const u8,
     imports_svg: []const u8,
-    facades_dot: []const u8,
-    facades_svg: []const u8,
     calls_dot: []const u8,
     calls_svg: []const u8,
     fields_dot: []const u8,
     fields_svg: []const u8,
     imports_rendered: bool,
-    facades_rendered: bool,
     calls_rendered: bool,
     fields_rendered: bool,
 };
@@ -34,8 +33,6 @@ pub fn write(
     const html_path = try std.fs.path.join(gpa, &.{ out_dir, "report.html" });
     const imports_dot = try std.fs.path.join(gpa, &.{ out_dir, "imports.dot" });
     const imports_svg = try std.fs.path.join(gpa, &.{ out_dir, "imports.svg" });
-    const facades_dot = try std.fs.path.join(gpa, &.{ out_dir, "facades.dot" });
-    const facades_svg = try std.fs.path.join(gpa, &.{ out_dir, "facades.svg" });
     const calls_dot = try std.fs.path.join(gpa, &.{ out_dir, "calls.dot" });
     const calls_svg = try std.fs.path.join(gpa, &.{ out_dir, "calls.svg" });
     const fields_dot = try std.fs.path.join(gpa, &.{ out_dir, "fields.dot" });
@@ -45,21 +42,23 @@ pub fn write(
     defer hierarchy.deinit();
 
     try writeImportDot(model_ptr, &hierarchy, io, imports_dot);
-    try writeFacadeDot(model_ptr, &hierarchy, io, facades_dot);
     try writeCallDot(model_ptr, io, calls_dot);
     if (model_ptr.config.track_fields) try writeFieldDot(model_ptr, io, fields_dot);
 
+    var layout = graph.Layout.load(gpa, io, imports_dot) catch graph.Layout.empty(gpa);
+    defer layout.deinit();
+    var payload = std.Io.Writer.Allocating.init(gpa);
+    defer payload.deinit();
+    try graph.writePayload(&payload.writer, model_ptr, &hierarchy, &layout);
+
     var imports_rendered = false;
-    var facades_rendered = false;
     var calls_rendered = false;
     var fields_rendered = false;
     if (with_graphs) {
         imports_rendered = renderSvg(io, imports_dot, imports_svg);
-        facades_rendered = renderSvg(io, facades_dot, facades_svg);
         calls_rendered = renderSvg(io, calls_dot, calls_svg);
         if (model_ptr.config.track_fields) fields_rendered = renderSvgEngine(io, "sfdp", fields_dot, fields_svg);
         if (!imports_rendered) std.debug.print("zigdepends: graphviz failed for {s}\n", .{imports_dot});
-        if (!facades_rendered) std.debug.print("zigdepends: graphviz failed for {s}\n", .{facades_dot});
         if (!calls_rendered) std.debug.print("zigdepends: graphviz failed for {s}\n", .{calls_dot});
         if (model_ptr.config.track_fields and !fields_rendered) std.debug.print("zigdepends: graphviz failed for {s}\n", .{fields_dot});
     }
@@ -68,21 +67,18 @@ pub fn write(
     defer aw.deinit();
     const w = &aw.writer;
 
-    try writeHtml(model_ptr, io, w, imports_svg, facades_svg, calls_svg, fields_svg, imports_rendered, facades_rendered, calls_rendered, fields_rendered);
+    try writeHtml(model_ptr, io, w, calls_svg, fields_svg, imports_rendered, calls_rendered, fields_rendered, payload.written());
     try Io.Dir.cwd().writeFile(io, .{ .sub_path = html_path, .data = aw.written() });
 
     return .{
         .html = html_path,
         .imports_dot = imports_dot,
         .imports_svg = imports_svg,
-        .facades_dot = facades_dot,
-        .facades_svg = facades_svg,
         .calls_dot = calls_dot,
         .calls_svg = calls_svg,
         .fields_dot = fields_dot,
         .fields_svg = fields_svg,
         .imports_rendered = imports_rendered,
-        .facades_rendered = facades_rendered,
         .calls_rendered = calls_rendered,
         .fields_rendered = fields_rendered,
     };
@@ -122,13 +118,6 @@ fn writeImportDot(model_ptr: *Model, hierarchy: *const graph.Hierarchy, io: Io, 
     var aw = std.Io.Writer.Allocating.init(model_ptr.gpa);
     defer aw.deinit();
     try graph.writeDetailed(&aw.writer, model_ptr, hierarchy);
-    try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = aw.written() });
-}
-
-fn writeFacadeDot(model_ptr: *Model, hierarchy: *const graph.Hierarchy, io: Io, path: []const u8) !void {
-    var aw = std.Io.Writer.Allocating.init(model_ptr.gpa);
-    defer aw.deinit();
-    try graph.writeFacades(&aw.writer, model_ptr, hierarchy);
     try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = aw.written() });
 }
 
@@ -376,14 +365,12 @@ fn writeHtml(
     model_ptr: *Model,
     io: Io,
     w: *std.Io.Writer,
-    imports_svg: []const u8,
-    facades_svg: []const u8,
     calls_svg: []const u8,
     fields_svg: []const u8,
     imports_rendered: bool,
-    facades_rendered: bool,
     calls_rendered: bool,
     fields_rendered: bool,
+    dependency_json: []const u8,
 ) !void {
     const s = model_ptr.settings;
     var total_loc: u32 = 0;
@@ -445,6 +432,11 @@ fn writeHtml(
         \\.graph{border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden;padding:0;height:76vh;min-height:440px;position:relative;touch-action:none}
         \\.graph svg{width:100%;height:100%;display:block;cursor:grab;user-select:none}
         \\.graph.dragging svg{cursor:grabbing}
+        \\.graph-interactive .graph-file text,.graph-interactive .graph-group text{pointer-events:none}
+        \\.graph-interactive .graph-header{cursor:pointer}
+        \\.graph-interactive .graph-node{cursor:grab}
+        \\.graph-interactive .graph-node.dragging{cursor:grabbing}
+        \\.graph-interactive .graph-edge{pointer-events:none}
         \\.graph-links{font-size:11px;margin:-4px 0 10px}
         \\.graph-links a{color:var(--accent);text-decoration:none;margin-right:10px}
         \\.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
@@ -711,13 +703,7 @@ fn writeHtml(
         try w.writeAll("</tbody></table></div>\n");
 
         try w.writeAll("<h3>Field access graph</h3><p class=\"graph-links\"><a href=\"fields.svg\">fields.svg</a><a href=\"fields.dot\">fields.dot</a></p>\n<p class=\"muted\">Blue = read, red = write, purple = read+write. Types with allocator/Io fields are green.</p>\n");
-        if (fields_rendered) {
-            try w.writeAll("<div class=\"graph\">");
-            try embedSvg(w, io, fields_svg);
-            try w.writeAll("</div>\n");
-        } else {
-            try w.writeAll("<p class=\"muted\">Graphviz did not render this graph. DOT was written next to the report.</p>\n");
-        }
+        try writeGraphBlock(w, io, fields_svg, fields_rendered);
         try w.writeAll("</section>\n");
     }
 
@@ -837,11 +823,30 @@ fn writeHtml(
 
     // Graphs.
     try w.writeAll("<section id=\"dependency-graph\"><h2>Dependency graph</h2>\n");
-    try w.writeAll("<p class=\"muted\">The facade view rolls submodules up and aggregates imports between top-level modules. The detailed view keeps every file edge and nests files inside their facade and submodule clusters.</p>\n");
-    try w.writeAll("<h3>Facades</h3><p class=\"graph-links\"><a href=\"facades.svg\">facades.svg</a><a href=\"facades.dot\">facades.dot</a></p>\n<p class=\"muted\">Node labels show the file count; edge labels show aggregated import counts. Red = cyclic coupling, dashed gray = generated target, dashed amber = unresolved module import.</p>\n");
-    try writeGraphBlock(w, io, facades_svg, facades_rendered);
-    try w.writeAll("<h3>Files inside facades</h3><p class=\"graph-links\"><a href=\"imports.svg\">imports.svg</a><a href=\"imports.dot\">imports.dot</a></p>\n<p class=\"muted\">Facades and nested submodules are parent clusters; file nodes and edges stay inside them. Gray dashed nodes are generated boundaries; red borders/edges are import cycles; dashed amber notes are unresolved module imports.</p>\n");
-    try writeGraphBlock(w, io, imports_svg, imports_rendered);
+    try w.writeAll("<p class=\"muted\">Files are grouped inside their facade and submodule containers. Click a container header to collapse or expand it, drag nodes to arrange the graph, and use the wheel to zoom.</p>\n");
+    try w.writeAll("<p class=\"graph-links\"><a href=\"imports.dot\">imports.dot</a>");
+    if (imports_rendered) try w.writeAll("<a href=\"imports.svg\">static imports.svg</a>");
+    try w.writeAll("</p>\n");
+    if (model_ptr.config.graph_exclude.items.len > 0) {
+        try w.writeAll("<p class=\"muted\">Excluded from this graph: ");
+        for (model_ptr.config.graph_exclude.items, 0..) |pattern, i| {
+            if (i != 0) try w.writeAll(", ");
+            try w.writeAll("<code>");
+            try htmlEscape(w, pattern);
+            try w.writeAll("</code>");
+        }
+        try w.writeAll(".</p>\n");
+    }
+    try w.writeAll("<div class=\"graph-shell\"><div class=\"graph-tools\">\n");
+    try w.writeAll("<button type=\"button\" data-graph-command=\"zoom-out\" title=\"Zoom out\">&minus;</button>\n");
+    try w.writeAll("<button type=\"button\" data-graph-command=\"zoom-in\" title=\"Zoom in\">+</button>\n");
+    try w.writeAll("<button type=\"button\" data-graph-command=\"fit\" title=\"Fit all visible nodes\">Fit</button>\n");
+    try w.writeAll("<button type=\"button\" data-graph-command=\"reset\" title=\"Reset layout and zoom\">Reset</button>\n");
+    try w.writeAll("<button type=\"button\" data-graph-command=\"collapse\" title=\"Collapse every facade\">Collapse all</button>\n");
+    try w.writeAll("<button type=\"button\" data-graph-command=\"expand\" title=\"Expand every facade\">Expand all</button>\n");
+    try w.writeAll("<span class=\"hint\">Click a facade header to collapse · drag nodes to arrange · wheel to zoom</span>\n");
+    try w.writeAll("</div><div class=\"graph graph-interactive\" data-dependency-graph></div></div>\n");
+    try w.writeAll("<p class=\"muted\">Red = import cycle, dashed gray = generated target, dashed amber = unresolved module import. Edge labels count aggregated imports when containers are collapsed.</p>\n");
     try w.writeAll("</section>\n<section><h2>Call graph</h2>\n<p class=\"graph-links\"><a href=\"calls.svg\">calls.svg</a><a href=\"calls.dot\">calls.dot</a></p>\n<p class=\"muted\">Top functions by debt, plus every recursion and call-stack node. Red = recursion, amber = high debt.</p>\n");
     try writeGraphBlock(w, io, calls_svg, calls_rendered);
     try w.writeAll("</section>\n");
@@ -1077,8 +1082,12 @@ fn writeHtml(
         \\}
         \\document.querySelectorAll('.graph[data-graph]').forEach(initGraph);
         \\</script>
-        \\</body></html>
+        \\<script>window.dependencyGraphData = 
     );
+    try w.writeAll(dependency_json);
+    try w.writeAll(";\n</script>\n<script>\n");
+    try w.writeAll(graph_view_js);
+    try w.writeAll("\n</script>\n</body></html>\n");
 }
 
 fn capabilityPills(w: *std.Io.Writer, f: model.FnInfo) !void {

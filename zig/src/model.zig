@@ -114,6 +114,7 @@ pub const FieldAccess = struct {
 
 pub const Config = struct {
     exclude: std.ArrayList([]const u8) = .empty,
+    graph_exclude: std.ArrayList([]const u8) = .empty,
     generated_paths: std.ArrayList([]const u8) = .empty,
     generated_markers: std.ArrayList([]const u8) = .empty,
     test_roots: std.ArrayList([]const u8) = .empty,
@@ -386,6 +387,13 @@ pub const Model = struct {
         return std.mem.eql(u8, raw, "std") or
             std.mem.eql(u8, raw, "builtin") or
             std.mem.eql(u8, raw, "root");
+    }
+
+    pub fn graphExcludes(self: *const Model, rel_path: []const u8) bool {
+        for (self.config.graph_exclude.items) |pattern| {
+            if (pathMatches(pattern, rel_path)) return true;
+        }
+        return false;
     }
 };
 
