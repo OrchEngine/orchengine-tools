@@ -618,7 +618,7 @@ fn addTestOnlyImportFindings(model_ptr: *Model) !void {
                 });
                 continue;
             }
-            if (test_root or imp.exported or imp.resolved == null) continue;
+            if (test_root or imp.exported) continue;
             const alias = imp.alias orelse continue;
             if (imp.test_refs == 0 or imp.prod_refs > 0) continue;
             try model_ptr.findings.append(gpa, .{
@@ -1309,11 +1309,13 @@ test "test-only import skips generated files and file-scope roots" {
     });
 
     try addTestOnlyImportFindings(&m);
-    try std.testing.expectEqual(@as(usize, 2), m.findings.items.len);
+    try std.testing.expectEqual(@as(usize, 3), m.findings.items.len);
     try std.testing.expectEqualStrings("src/unit_tests.zig:root_helper", m.findings.items[0].key.?);
     try std.testing.expect(mem.find(u8, m.findings.items[0].message, "declared inside a test") != null);
     try std.testing.expectEqualStrings("src/local.zig:helper", m.findings.items[1].key.?);
     try std.testing.expect(mem.find(u8, m.findings.items[1].message, "declared inside a test") != null);
+    try std.testing.expectEqualStrings("src/unresolved.zig:missing", m.findings.items[2].key.?);
+    try std.testing.expect(mem.find(u8, m.findings.items[2].message, "only used by tests") != null);
 }
 
 test "test-only import flags direct imports declared inside tests" {
