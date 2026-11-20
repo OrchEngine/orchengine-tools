@@ -5,9 +5,10 @@ Tooling for Go and Zig repositories and OpenCode, originally built for
 
 - [`go/`](go/README.md) — static call graphs, go-callvis, and field read/write
   graphs: `callgraph`, `go-callvis`, `fieldgraph`, `cg`.
-- [`zig/`](zig/README.md) — `zigdepends`: import/call graphs, call stacks,
-  cycles, generated-code filtering, allocator/Io capability tags, field
-  read/write ownership signals, and a technical-debt HTML report for Zig code.
+- [`zig/`](zig/README.md) — `zigdepends`: hierarchical facade/import graphs,
+  call graphs, call stacks, cycles, generated-code filtering, allocator/Io
+  capability tags, field read/write ownership signals, and a technical-debt HTML
+  report for Zig code.
 - [`opencode-plugins/`](opencode-plugins/README.md) — OpenCode plugins and CLIs.
 
 ## Layout

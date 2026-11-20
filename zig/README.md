@@ -95,10 +95,10 @@ a rule requires a new release; use the source build during rule development.
 
 ## zigdepends
 
-A small NDepend-style report: dependency graph, call graph, call stacks,
-recursion and import cycles, allocator/Io capability requirements, field
-read/write ownership signals, and a heuristic technical-debt score. It writes
-a single `report.html` (with Graphviz SVG embedded) plus the `.dot` / `.svg`
+A small NDepend-style report: hierarchical dependency graphs, call graph, call
+stacks, recursion and import cycles, allocator/Io capability requirements, field
+read/write ownership signals, and a heuristic technical-debt score. It writes a
+single `report.html` (with Graphviz SVG embedded) plus the `.dot` / `.svg`
 sources next to it, then opens the HTML in the default browser. Generated files
 are detected by their standard header and excluded from metrics while remaining
 visible as import boundaries.
@@ -241,12 +241,23 @@ Output:
 
 - `report.html` — self-contained summary, findings, tables, cycles, call stacks,
   and inline SVG graphs.
-- `imports.dot` / `imports.svg` — file import graph.
+- `facades.dot` / `facades.svg` — zoomed-out module graph with aggregated
+  cross-module import counts.
+- `imports.dot` / `imports.svg` — detailed file import graph with module and
+  submodule parent clusters.
 - `calls.dot` / `calls.svg` — call graph of top-debt functions, recursion
   groups, and call-stack nodes.
 - `fields.dot` / `fields.svg` — function → type field read/write graph.
 - Generated files are excluded from function, debt, capability, and
   field-access metrics while remaining import boundary nodes.
+
+The dependency hierarchy follows the repository convention: `src/<module>.zig`
+is a facade, `src/<module>/` contains its internals, and a directory such as
+`src/editor/graph/` becomes a submodule inside `editor` when `graph.zig` exists.
+Files in the same facade or submodule are drawn inside that parent cluster;
+directories without a facade stay rolled up into the module. The embedded
+graphs support wheel zoom, drag pan, reset, and double-click focus on a node or
+cluster. `--no-graph` still writes every `.dot` file.
 
 ### What it extracts
 
@@ -306,6 +317,10 @@ These are configurable estimates, not measurements.
   report shows how many calls were resolved, unresolved, and external.
 - `build.zig` is not interpreted; module imports are reported as unresolved
   boundaries instead of guessed.
+- The facade hierarchy is path-based. A module is `src/<name>.zig` plus
+  `src/<name>/`; nested submodules require a matching `<dir>/<name>.zig` facade
+  file. Directories without that facade are rolled up into their parent module,
+  so generated paths do not create artificial singleton submodules.
 - Import cycles are legal in Zig (`@import` is lazy); the report highlights
   them as architectural coupling, not as compiler errors.
 - Capability detection is heuristic: allocator/Io stored in a struct field is

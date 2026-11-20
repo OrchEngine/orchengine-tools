@@ -35,7 +35,7 @@ const usage =
     \\      --zlint-report <file>  read zlint JSONL findings
     \\  -h, --help            print this help
     \\
-    \\Output: report.html, imports.dot/svg, calls.dot/svg, fields.dot/svg.
+    \\Output: report.html, facades.dot/svg, imports.dot/svg, calls.dot/svg, fields.dot/svg.
     \\
 ;
 
@@ -311,6 +311,7 @@ pub fn main(init: std.process.Init) !void {
         "import cycles: {d}  recursion: {d}  debt: {d} min (~{d:.1} h)\n" ++
             "report: {s}\n" ++
             "dot:    {s}\n" ++
+            "dot:    {s}\n" ++
             "dot:    {s}\n",
         .{
             m.import_cycles.items.len,
@@ -318,6 +319,7 @@ pub fn main(init: std.process.Init) !void {
             m.total_debt,
             @as(f64, @floatFromInt(m.total_debt)) / 60.0,
             paths.html,
+            paths.facades_dot,
             paths.imports_dot,
             paths.calls_dot,
         },

@@ -1,6 +1,7 @@
 const std = @import("std");
 const Io = std.Io;
 const model = @import("model.zig");
+const graph = @import("graph.zig");
 
 const Model = model.Model;
 const Gpa = model.Gpa;
@@ -9,11 +10,14 @@ pub const Paths = struct {
     html: []const u8,
     imports_dot: []const u8,
     imports_svg: []const u8,
+    facades_dot: []const u8,
+    facades_svg: []const u8,
     calls_dot: []const u8,
     calls_svg: []const u8,
     fields_dot: []const u8,
     fields_svg: []const u8,
     imports_rendered: bool,
+    facades_rendered: bool,
     calls_rendered: bool,
     fields_rendered: bool,
 };
@@ -30,23 +34,32 @@ pub fn write(
     const html_path = try std.fs.path.join(gpa, &.{ out_dir, "report.html" });
     const imports_dot = try std.fs.path.join(gpa, &.{ out_dir, "imports.dot" });
     const imports_svg = try std.fs.path.join(gpa, &.{ out_dir, "imports.svg" });
+    const facades_dot = try std.fs.path.join(gpa, &.{ out_dir, "facades.dot" });
+    const facades_svg = try std.fs.path.join(gpa, &.{ out_dir, "facades.svg" });
     const calls_dot = try std.fs.path.join(gpa, &.{ out_dir, "calls.dot" });
     const calls_svg = try std.fs.path.join(gpa, &.{ out_dir, "calls.svg" });
     const fields_dot = try std.fs.path.join(gpa, &.{ out_dir, "fields.dot" });
     const fields_svg = try std.fs.path.join(gpa, &.{ out_dir, "fields.svg" });
 
-    try writeImportDot(model_ptr, io, imports_dot);
+    var hierarchy = try graph.build(model_ptr);
+    defer hierarchy.deinit();
+
+    try writeImportDot(model_ptr, &hierarchy, io, imports_dot);
+    try writeFacadeDot(model_ptr, &hierarchy, io, facades_dot);
     try writeCallDot(model_ptr, io, calls_dot);
     if (model_ptr.config.track_fields) try writeFieldDot(model_ptr, io, fields_dot);
 
     var imports_rendered = false;
+    var facades_rendered = false;
     var calls_rendered = false;
     var fields_rendered = false;
     if (with_graphs) {
         imports_rendered = renderSvg(io, imports_dot, imports_svg);
+        facades_rendered = renderSvg(io, facades_dot, facades_svg);
         calls_rendered = renderSvg(io, calls_dot, calls_svg);
         if (model_ptr.config.track_fields) fields_rendered = renderSvgEngine(io, "sfdp", fields_dot, fields_svg);
         if (!imports_rendered) std.debug.print("zigdepends: graphviz failed for {s}\n", .{imports_dot});
+        if (!facades_rendered) std.debug.print("zigdepends: graphviz failed for {s}\n", .{facades_dot});
         if (!calls_rendered) std.debug.print("zigdepends: graphviz failed for {s}\n", .{calls_dot});
         if (model_ptr.config.track_fields and !fields_rendered) std.debug.print("zigdepends: graphviz failed for {s}\n", .{fields_dot});
     }
@@ -55,18 +68,21 @@ pub fn write(
     defer aw.deinit();
     const w = &aw.writer;
 
-    try writeHtml(model_ptr, io, w, imports_svg, calls_svg, fields_svg, imports_rendered, calls_rendered, fields_rendered);
+    try writeHtml(model_ptr, io, w, imports_svg, facades_svg, calls_svg, fields_svg, imports_rendered, facades_rendered, calls_rendered, fields_rendered);
     try Io.Dir.cwd().writeFile(io, .{ .sub_path = html_path, .data = aw.written() });
 
     return .{
         .html = html_path,
         .imports_dot = imports_dot,
         .imports_svg = imports_svg,
+        .facades_dot = facades_dot,
+        .facades_svg = facades_svg,
         .calls_dot = calls_dot,
         .calls_svg = calls_svg,
         .fields_dot = fields_dot,
         .fields_svg = fields_svg,
         .imports_rendered = imports_rendered,
+        .facades_rendered = facades_rendered,
         .calls_rendered = calls_rendered,
         .fields_rendered = fields_rendered,
     };
@@ -102,70 +118,17 @@ fn dotStr(w: *std.Io.Writer, s: []const u8) !void {
     try w.writeByte('"');
 }
 
-fn writeImportDot(model_ptr: *Model, io: Io, path: []const u8) !void {
+fn writeImportDot(model_ptr: *Model, hierarchy: *const graph.Hierarchy, io: Io, path: []const u8) !void {
     var aw = std.Io.Writer.Allocating.init(model_ptr.gpa);
     defer aw.deinit();
-    const w = &aw.writer;
+    try graph.writeDetailed(&aw.writer, model_ptr, hierarchy);
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = aw.written() });
+}
 
-    try w.writeAll("digraph imports {\n");
-    try w.writeAll("  graph [rankdir=LR, bgcolor=\"white\", fontname=\"Helvetica\", fontsize=10, nodesep=0.35, ranksep=0.7, labelloc=t];\n");
-    try w.writeAll("  node [fontname=\"Helvetica\", fontsize=9];\n");
-    try w.writeAll("  edge [fontname=\"Helvetica\", fontsize=7, arrowsize=0.7, color=\"#5b6b7c\"];\n");
-
-    for (model_ptr.files.items, 0..) |file, i| {
-        try w.print("  f{d} [shape=box, ", .{i});
-        if (file.generated) {
-            try w.writeAll("style=\"rounded,filled,dashed\", fillcolor=\"#f6f8fa\", color=\"#8c959f\"");
-        } else if (file.in_import_cycle) {
-            try w.writeAll("style=\"rounded,filled\", fillcolor=\"#fbe9e7\", color=\"#d93025\", penwidth=1.6");
-        } else {
-            try w.writeAll("style=\"rounded,filled\", fillcolor=\"#f3e8fd\", color=\"#8250df\"");
-        }
-        try w.writeAll(", label=");
-        if (file.generated) {
-            const label = try std.fmt.allocPrint(model_ptr.gpa, "{s} (generated)", .{model_ptr.fileLabel(@intCast(i))});
-            try dotStr(w, label);
-        } else {
-            try dotStr(w, model_ptr.fileLabel(@intCast(i)));
-        }
-        try w.writeAll(", tooltip=");
-        try dotStr(w, file.path);
-        try w.writeAll("];\n");
-    }
-
-    for (model_ptr.module_imports.items, 0..) |mi, i| {
-        try w.print("  ext{d} [shape=note, style=\"dashed,filled\", fillcolor=\"#fff3cd\", color=\"#e37400\", label=", .{i});
-        try dotStr(w, mi.raw);
-        try w.writeAll("];\n");
-    }
-
-    for (model_ptr.files.items, 0..) |file, i| {
-        for (file.imports.items) |imp| {
-            if (imp.excluded) continue;
-            if (imp.resolved) |target| {
-                try w.print("  f{d} -> f{d}", .{ i, target });
-                if (model_ptr.files.items[target].generated) {
-                    try w.writeAll(" [style=dashed, color=\"#8c959f\"]");
-                } else if (file.cycle_id != null and file.cycle_id == model_ptr.files.items[target].cycle_id) {
-                    try w.writeAll(" [color=\"#d93025\", penwidth=1.6]");
-                }
-                try w.writeAll(";\n");
-            } else if (!Model.isExternalImport(imp.raw)) {
-                var ext_index: ?usize = null;
-                for (model_ptr.module_imports.items, 0..) |mi, mi_idx| {
-                    if (mi.file == i and std.mem.eql(u8, mi.raw, imp.raw)) {
-                        ext_index = mi_idx;
-                        break;
-                    }
-                }
-                if (ext_index) |ei| {
-                    try w.print("  f{d} -> ext{d} [style=dashed, color=\"#e37400\"];\n", .{ i, ei });
-                }
-            }
-        }
-    }
-
-    try w.writeAll("}\n");
+fn writeFacadeDot(model_ptr: *Model, hierarchy: *const graph.Hierarchy, io: Io, path: []const u8) !void {
+    var aw = std.Io.Writer.Allocating.init(model_ptr.gpa);
+    defer aw.deinit();
+    try graph.writeFacades(&aw.writer, model_ptr, hierarchy);
     try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = aw.written() });
 }
 
@@ -414,9 +377,11 @@ fn writeHtml(
     io: Io,
     w: *std.Io.Writer,
     imports_svg: []const u8,
+    facades_svg: []const u8,
     calls_svg: []const u8,
     fields_svg: []const u8,
     imports_rendered: bool,
+    facades_rendered: bool,
     calls_rendered: bool,
     fields_rendered: bool,
 ) !void {
@@ -472,8 +437,14 @@ fn writeHtml(
         \\.chain{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:6px 0 12px;font-size:12px}
         \\.chain .node{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 6px}
         \\.chain .arrow{color:var(--muted)}
-        \\.graph{border:1px solid var(--line);border-radius:8px;background:#fff;overflow:auto;padding:8px;max-height:74vh}
-        \\.graph svg{max-width:none;height:auto;display:block;margin:0 auto}
+        \\.graph-shell{margin:8px 0 18px}
+        \\.graph-tools{display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+        \\.graph-tools button{border:1px solid var(--line);background:#fff;color:var(--fg);border-radius:6px;padding:3px 9px;font:12px Helvetica,Arial,sans-serif;cursor:pointer}
+        \\.graph-tools button:hover{background:var(--panel);border-color:#b6a2d8}
+        \\.graph-tools .hint{color:var(--muted);font-size:11px;margin-left:auto}
+        \\.graph{border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden;padding:0;height:76vh;min-height:440px;position:relative;touch-action:none}
+        \\.graph svg{width:100%;height:100%;display:block;cursor:grab;user-select:none}
+        \\.graph.dragging svg{cursor:grabbing}
         \\.graph-links{font-size:11px;margin:-4px 0 10px}
         \\.graph-links a{color:var(--accent);text-decoration:none;margin-right:10px}
         \\.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
@@ -865,22 +836,14 @@ fn writeHtml(
     try w.writeAll("</section>\n");
 
     // Graphs.
-    try w.writeAll("<section><h2>Import graph</h2>\n<p class=\"graph-links\"><a href=\"imports.svg\">imports.svg</a><a href=\"imports.dot\">imports.dot</a></p>\n<p class=\"muted\">File nodes; gray dashed nodes are generated boundaries; red borders/edges are import cycles; dashed amber notes are unresolved module imports.</p>\n");
-    if (imports_rendered) {
-        try w.writeAll("<div class=\"graph\">");
-        try embedSvg(w, io, imports_svg);
-        try w.writeAll("</div>\n");
-    } else {
-        try w.writeAll("<p class=\"muted\">Graphviz did not render this graph. DOT was written next to the report.</p>\n");
-    }
+    try w.writeAll("<section id=\"dependency-graph\"><h2>Dependency graph</h2>\n");
+    try w.writeAll("<p class=\"muted\">The facade view rolls submodules up and aggregates imports between top-level modules. The detailed view keeps every file edge and nests files inside their facade and submodule clusters.</p>\n");
+    try w.writeAll("<h3>Facades</h3><p class=\"graph-links\"><a href=\"facades.svg\">facades.svg</a><a href=\"facades.dot\">facades.dot</a></p>\n<p class=\"muted\">Node labels show the file count; edge labels show aggregated import counts. Red = cyclic coupling, dashed gray = generated target, dashed amber = unresolved module import.</p>\n");
+    try writeGraphBlock(w, io, facades_svg, facades_rendered);
+    try w.writeAll("<h3>Files inside facades</h3><p class=\"graph-links\"><a href=\"imports.svg\">imports.svg</a><a href=\"imports.dot\">imports.dot</a></p>\n<p class=\"muted\">Facades and nested submodules are parent clusters; file nodes and edges stay inside them. Gray dashed nodes are generated boundaries; red borders/edges are import cycles; dashed amber notes are unresolved module imports.</p>\n");
+    try writeGraphBlock(w, io, imports_svg, imports_rendered);
     try w.writeAll("</section>\n<section><h2>Call graph</h2>\n<p class=\"graph-links\"><a href=\"calls.svg\">calls.svg</a><a href=\"calls.dot\">calls.dot</a></p>\n<p class=\"muted\">Top functions by debt, plus every recursion and call-stack node. Red = recursion, amber = high debt.</p>\n");
-    if (calls_rendered) {
-        try w.writeAll("<div class=\"graph\">");
-        try embedSvg(w, io, calls_svg);
-        try w.writeAll("</div>\n");
-    } else {
-        try w.writeAll("<p class=\"muted\">Graphviz did not render this graph. DOT was written next to the report.</p>\n");
-    }
+    try writeGraphBlock(w, io, calls_svg, calls_rendered);
     try w.writeAll("</section>\n");
 
     // Files.
@@ -985,6 +948,134 @@ fn writeHtml(
         \\    rows.forEach(r=>tb.appendChild(r));
         \\  });
         \\});
+        \\function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
+        \\function graphViewBox(svg){
+        \\  if(svg.viewBox&&svg.viewBox.baseVal&&svg.viewBox.baseVal.width>0){
+        \\    const vb=svg.viewBox.baseVal;
+        \\    return {x:vb.x,y:vb.y,w:vb.width,h:vb.height};
+        \\  }
+        \\  const w=parseFloat(svg.getAttribute('width')||'0');
+        \\  const h=parseFloat(svg.getAttribute('height')||'0');
+        \\  return w>0&&h>0?{x:0,y:0,w:w,h:h}:null;
+        \\}
+        \\function setGraphView(svg,v){svg.setAttribute('viewBox',v.x+' '+v.y+' '+v.w+' '+v.h);}
+        \\function focusBox(svg,el){
+        \\  const b=el.getBBox();
+        \\  if(!b||b.width<=0||b.height<=0)return null;
+        \\  const ctm=el.getCTM(),root=svg.getCTM();
+        \\  if(!ctm||!root)return null;
+        \\  const m=root.inverse().multiply(ctm);
+        \\  const pts=[[b.x,b.y],[b.x+b.width,b.y],[b.x,b.y+b.height],[b.x+b.width,b.y+b.height]].map(p=>{
+        \\    const q=svg.createSVGPoint();q.x=p[0];q.y=p[1];return q.matrixTransform(m);
+        \\  });
+        \\  let x1=Infinity,y1=Infinity,x2=-Infinity,y2=-Infinity;
+        \\  pts.forEach(p=>{x1=Math.min(x1,p.x);y1=Math.min(y1,p.y);x2=Math.max(x2,p.x);y2=Math.max(y2,p.y);});
+        \\  return {x:x1,y:y1,w:x2-x1,h:y2-y1};
+        \\}
+        \\function graphHit(svg,box,view,x,y){
+        \\  const r=box.getBoundingClientRect();
+        \\  const s=Math.min(r.width/view.w,r.height/view.h)||1;
+        \\  const ox=(r.width-view.w*s)/2,oy=(r.height-view.h*s)/2;
+        \\  const toClient=(px,py)=>({x:r.left+ox+(px-view.x)*s,y:r.top+oy+(py-view.y)*s});
+        \\  let best=null,bestArea=Infinity;
+        \\  svg.querySelectorAll('g.node, g.cluster').forEach(el=>{
+        \\    const b=focusBox(svg,el);
+        \\    if(!b||b.w<=0||b.h<=0)return;
+        \\    const p1=toClient(b.x,b.y),p2=toClient(b.x+b.w,b.y+b.h);
+        \\    if(x<p1.x||x>p2.x||y<p1.y||y>p2.y)return;
+        \\    const area=b.w*b.h;
+        \\    if(area<bestArea){best=el;bestArea=area;}
+        \\  });
+        \\  return best;
+        \\}
+        \\function initGraph(box){
+        \\  const svg=box.querySelector('svg');
+        \\  if(!svg)return;
+        \\  const initial=graphViewBox(svg);
+        \\  if(!initial)return;
+        \\  svg.removeAttribute('width');
+        \\  svg.removeAttribute('height');
+        \\  let view=fitView();
+        \\  const minW=Math.max(initial.w/50,0.01),maxW=initial.w*10;
+        \\  function apply(){setGraphView(svg,view);}
+        \\  function fitView(){
+        \\    const r=box.getBoundingClientRect();
+        \\    if(r.width<=0||r.height<=0)return {x:initial.x,y:initial.y,w:initial.w,h:initial.h};
+        \\    const fitH=initial.w*r.height/r.width;
+        \\    if(initial.h<=fitH)return {x:initial.x,y:initial.y,w:initial.w,h:initial.h};
+        \\    return {x:initial.x,y:initial.y,w:initial.w,h:fitH};
+        \\  }
+        \\  function pointAt(e){
+        \\    const r=box.getBoundingClientRect();
+        \\    const s=Math.min(r.width/view.w,r.height/view.h)||1;
+        \\    const ox=(r.width-view.w*s)/2,oy=(r.height-view.h*s)/2;
+        \\    return {x:view.x+(e.clientX-r.left-ox)/s,y:view.y+(e.clientY-r.top-oy)/s};
+        \\  }
+        \\  function zoomAt(px,py,factor){
+        \\    const nw=clamp(view.w*factor,minW,maxW);
+        \\    const k=nw/view.w;
+        \\    view.x=px-(px-view.x)*k;
+        \\    view.y=py-(py-view.y)*k;
+        \\    view.w=nw;
+        \\    view.h*=k;
+        \\    apply();
+        \\  }
+        \\  box.addEventListener('wheel',e=>{
+        \\    e.preventDefault();
+        \\    const p=pointAt(e);
+        \\    zoomAt(p.x,p.y,e.deltaY<0?0.82:1.22);
+        \\  },{passive:false});
+        \\  let drag=null;
+        \\  svg.addEventListener('pointerdown',e=>{
+        \\    if(e.button!==0)return;
+        \\    drag={sx:e.clientX,sy:e.clientY,x:view.x,y:view.y,moved:false,id:e.pointerId};
+        \\  });
+        \\  svg.addEventListener('pointermove',e=>{
+        \\    if(!drag)return;
+        \\    if(!drag.moved){
+        \\      if(Math.abs(e.clientX-drag.sx)+Math.abs(e.clientY-drag.sy)<3)return;
+        \\      drag.moved=true;
+        \\      svg.setPointerCapture(drag.id);
+        \\      box.classList.add('dragging');
+        \\    }
+        \\    const r=box.getBoundingClientRect();
+        \\    const s=Math.min(r.width/view.w,r.height/view.h)||1;
+        \\    view.x=drag.x-(e.clientX-drag.sx)/s;
+        \\    view.y=drag.y-(e.clientY-drag.sy)/s;
+        \\    apply();
+        \\  });
+        \\  function endDrag(){
+        \\    if(!drag)return;
+        \\    if(drag.moved){try{svg.releasePointerCapture(drag.id);}catch(_){}}
+        \\    drag=null;
+        \\    box.classList.remove('dragging');
+        \\  }
+        \\  svg.addEventListener('pointerup',endDrag);
+        \\  svg.addEventListener('pointercancel',endDrag);
+        \\  svg.addEventListener('dblclick',e=>{
+        \\    let target=e.target.closest?e.target.closest('g.node, g.cluster'):null;
+        \\    if(!target)target=graphHit(svg,box,view,e.clientX,e.clientY);
+        \\    if(!target)return;
+        \\    const part=focusBox(svg,target);
+        \\    if(!part)return;
+        \\    const pad=Math.max(part.w,part.h)*0.12;
+        \\    view={x:part.x-pad,y:part.y-pad,w:part.w+pad*2,h:part.h+pad*2};
+        \\    apply();
+        \\    e.preventDefault();
+        \\  });
+        \\  const shell=box.parentElement;
+        \\  if(shell){
+        \\    shell.querySelectorAll('[data-graph-action]').forEach(btn=>{
+        \\      btn.addEventListener('click',()=>{
+        \\        const action=btn.getAttribute('data-graph-action');
+        \\        if(action==='reset'){view=fitView();apply();return;}
+        \\        zoomAt(view.x+view.w/2,view.y+view.h/2,action==='in'?0.72:1.38);
+        \\      });
+        \\    });
+        \\  }
+        \\  apply();
+        \\}
+        \\document.querySelectorAll('.graph[data-graph]').forEach(initGraph);
         \\</script>
         \\</body></html>
     );
@@ -1049,6 +1140,21 @@ fn card(w: *std.Io.Writer, label: []const u8, value: anytype, hot: bool, warn: b
     try w.writeAll("</b><span>");
     try htmlEscape(w, label);
     try w.writeAll("</span></div>\n");
+}
+
+fn writeGraphBlock(w: *std.Io.Writer, io: Io, svg_path: []const u8, rendered: bool) !void {
+    if (!rendered) {
+        try w.writeAll("<p class=\"muted\">Graphviz did not render this graph. DOT was written next to the report.</p>\n");
+        return;
+    }
+    try w.writeAll("<div class=\"graph-shell\"><div class=\"graph-tools\">\n");
+    try w.writeAll("<button type=\"button\" data-graph-action=\"out\" title=\"Zoom out\">&minus;</button>\n");
+    try w.writeAll("<button type=\"button\" data-graph-action=\"in\" title=\"Zoom in\">+</button>\n");
+    try w.writeAll("<button type=\"button\" data-graph-action=\"reset\" title=\"Reset zoom\">Reset</button>\n");
+    try w.writeAll("<span class=\"hint\">Wheel to zoom · drag to pan · double-click a node or cluster to focus</span>\n");
+    try w.writeAll("</div><div class=\"graph\" data-graph>");
+    try embedSvg(w, io, svg_path);
+    try w.writeAll("</div></div>\n");
 }
 
 fn embedSvg(w: *std.Io.Writer, io: Io, path: []const u8) !void {
