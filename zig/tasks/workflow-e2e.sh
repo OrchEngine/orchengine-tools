@@ -56,8 +56,7 @@ event order_received: OrderReceived
 ORCH
 if "$bin" generate-all \
     --workflows "$tmp/invalid" \
-    --output "$tmp/rejected" \
-    --definitions nodes >/dev/null 2>&1; then
+    --output "$tmp/rejected" >/dev/null 2>&1; then
     echo "generate-all accepted a runnable workflow without an id" >&2
     exit 1
 fi
@@ -66,16 +65,14 @@ cp "$tmp/definitions/e2e.orch" "$tmp/duplicate/first.orch"
 sed 's/workflow e2e/workflow duplicate/' "$tmp/definitions/e2e.orch" > "$tmp/duplicate/second.orch"
 if "$bin" generate-all \
     --workflows "$tmp/duplicate" \
-    --output "$tmp/rejected" \
-    --definitions nodes >/dev/null 2>&1; then
+    --output "$tmp/rejected" >/dev/null 2>&1; then
     echo "generate-all accepted duplicate workflow ids" >&2
     exit 1
 fi
 
 "$bin" generate-all \
     --workflows "$tmp/definitions" \
-    --output "$tmp/generated" \
-    --definitions nodes
+    --output "$tmp/generated"
 
 test -f "$tmp/generated/e2e_workflow_gen.zig"
 test -f "$tmp/generated/e2e_conditional_workflow_gen.zig"

@@ -10,8 +10,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 "$bin" generate-all \
     --workflows customworkflows/definitions \
-    --output "$tmp" \
-    --definitions nodes
+    --output "$tmp"
 
 list_generated() {
     local dir="$1"
