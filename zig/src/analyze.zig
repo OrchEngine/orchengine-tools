@@ -599,9 +599,26 @@ fn addTestOnlyImportFindings(model_ptr: *Model) !void {
     for (model_ptr.files.items, 0..) |file, file_idx| {
         if (file.generated) continue;
         const label = model_ptr.fileLabel(@intCast(file_idx));
-        if (model_ptr.isTestRoot(label)) continue;
+        const test_root = model_ptr.isTestRoot(label);
         for (file.imports.items) |imp| {
-            if (imp.in_test or imp.resolved == null) continue;
+            if (imp.in_test) {
+                const name = imp.alias orelse imp.raw;
+                try model_ptr.findings.append(gpa, .{
+                    .rule_id = "test-only-import",
+                    .severity = severity,
+                    .message = if (imp.alias != null)
+                        try gpa.print("import '{s}' from \"{s}\" is declared inside a test; move the test to the module that owns the dependency or to an integration test", .{ name, imp.raw })
+                    else
+                        try gpa.print("import \"{s}\" is declared inside a test; move the test to the module that owns the dependency or to an integration test", .{imp.raw}),
+                    .path = label,
+                    .line = imp.line,
+                    .source = .project,
+                    .weight = model_ptr.findingWeight("test-only-import", severity),
+                    .key = try gpa.print("{s}:{s}", .{ label, name }),
+                });
+                continue;
+            }
+            if (test_root or imp.resolved == null) continue;
             const alias = imp.alias orelse continue;
             if (imp.test_refs == 0 or imp.prod_refs > 0) continue;
             try model_ptr.findings.append(gpa, .{
@@ -800,7 +817,10 @@ fn computeChains(model_ptr: *Model) !void {
 }
 
 test "capabilities propagate to callers" {
-    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
     var m = Model{
         .gpa = alloc,
         .root = ".",
@@ -838,7 +858,7 @@ test "capabilities propagate to callers" {
         .has_doc = true,
         .parent_allocator = true,
     });
-    try m.fns.items[1].callers.append(alloc, 0);
+    try m.fns.items[0].callers.append(alloc, 1);
     computeCapabilities(&m);
 
     try std.testing.expect(m.fns.items[0].needs_allocator);
@@ -875,7 +895,9 @@ fn testModel(alloc: Allocator) !Model {
 }
 
 test "findings drive debt" {
-    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
     var m = try testModel(alloc);
     try m.findings.append(alloc, .{
         .rule_id = "test-rule",
@@ -896,7 +918,9 @@ test "findings drive debt" {
 }
 
 test "suppressed findings do not drive debt" {
-    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
     var m = try testModel(alloc);
     try m.findings.append(alloc, .{
         .rule_id = "test-rule",
@@ -916,7 +940,9 @@ test "suppressed findings do not drive debt" {
 }
 
 test "findings outside functions are structural" {
-    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
     var m = try testModel(alloc);
     try m.findings.append(alloc, .{
         .rule_id = "test-rule",
@@ -1126,6 +1152,7 @@ test "uncalled private function finding and suppression" {
         .is_pub = false,
         .has_doc = false,
     });
+    try m.files.items[file].fns.append(alloc, 0);
     try m.files.items[file].fns.append(alloc, 1);
 
     try addUncalledPrivateFindings(&m);
@@ -1192,7 +1219,7 @@ test "test-only import finding and suppression" {
     try std.testing.expectEqual(@as(u32, 0), m.total_debt);
 }
 
-test "test-only import skips roots, generated files, and test-local imports" {
+test "test-only import skips generated files and file-scope roots" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -1213,6 +1240,14 @@ test "test-only import skips roots, generated files, and test-local imports" {
         .test_refs = 1,
         .resolved = helper,
     });
+    try m.files.items[root_idx].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .alias = "root_helper",
+        .line = 3,
+        .test_refs = 1,
+        .in_test = true,
+        .resolved = helper,
+    });
 
     const generated_idx = try m.addFile("src/gen.zig", "");
     m.files.items[generated_idx].generated = true;
@@ -1221,6 +1256,7 @@ test "test-only import skips roots, generated files, and test-local imports" {
         .alias = "helper",
         .line = 2,
         .test_refs = 1,
+        .in_test = true,
         .resolved = helper,
     });
 
@@ -1263,7 +1299,35 @@ test "test-only import skips roots, generated files, and test-local imports" {
     });
 
     try addTestOnlyImportFindings(&m);
-    try std.testing.expectEqual(@as(usize, 0), m.findings.items.len);
+    try std.testing.expectEqual(@as(usize, 2), m.findings.items.len);
+    try std.testing.expectEqualStrings("src/unit_tests.zig:root_helper", m.findings.items[0].key.?);
+    try std.testing.expect(mem.find(u8, m.findings.items[0].message, "declared inside a test") != null);
+    try std.testing.expectEqualStrings("src/local.zig:helper", m.findings.items[1].key.?);
+    try std.testing.expect(mem.find(u8, m.findings.items[1].message, "declared inside a test") != null);
+}
+
+test "test-only import flags direct imports declared inside tests" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var m = Model{
+        .gpa = alloc,
+        .root = ".",
+        .title = "test",
+        .settings = .{},
+    };
+    const source = try m.addFile("src/a.zig", "");
+    try m.files.items[source].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .line = 7,
+        .in_test = true,
+    });
+
+    try addTestOnlyImportFindings(&m);
+    try std.testing.expectEqual(@as(usize, 1), m.findings.items.len);
+    try std.testing.expectEqualStrings("src/a.zig:helper.zig", m.findings.items[0].key.?);
+    try std.testing.expect(mem.find(u8, m.findings.items[0].message, "declared inside a test") != null);
 }
 
 test "test-only import uses configured severity and weight" {
