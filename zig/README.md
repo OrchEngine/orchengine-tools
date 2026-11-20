@@ -249,8 +249,9 @@ module that already owns the dependency, or to an integration test. Unnamed
 `test { ... }` registration blocks are exempt, so test roots can keep importing
 test files there. A file-scope aliased import that resolves to a local `.zig`
 file is reported when every alias reference is inside a `test` declaration,
-except in `test_roots`. `test_roots` adds project-specific test roots to the
-built-in `src/unit_tests.zig`, `src/integration_tests.zig`, and
+except in `test_roots`. Public `pub const` re-exports are facade API and stay
+exempt. `test_roots` adds project-specific test roots to the built-in
+`src/unit_tests.zig`, `src/integration_tests.zig`, and
 `customworkflows/generated.zig` defaults; entries accept glob patterns. External
 imports and generated files are skipped. The finding key is `<file>:<alias>`,
 or `<file>:<raw>` for a direct import. Test-only imports do not contribute to

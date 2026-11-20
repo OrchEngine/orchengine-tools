@@ -618,7 +618,7 @@ fn addTestOnlyImportFindings(model_ptr: *Model) !void {
                 });
                 continue;
             }
-            if (test_root or imp.resolved == null) continue;
+            if (test_root or imp.exported or imp.resolved == null) continue;
             const alias = imp.alias orelse continue;
             if (imp.test_refs == 0 or imp.prod_refs > 0) continue;
             try model_ptr.findings.append(gpa, .{
@@ -1286,6 +1286,16 @@ test "test-only import skips generated files and file-scope roots" {
         .alias = "missing",
         .line = 2,
         .test_refs = 1,
+    });
+
+    const facade_idx = try m.addFile("src/facade.zig", "");
+    try m.files.items[facade_idx].imports.append(alloc, .{
+        .raw = "helper.zig",
+        .alias = "helper",
+        .line = 2,
+        .test_refs = 1,
+        .resolved = helper,
+        .exported = true,
     });
 
     try m.config.test_roots.append(alloc, "src/custom_root.zig");

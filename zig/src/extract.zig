@@ -662,6 +662,7 @@ fn addImport(model_ptr: *Model, file_idx: u32, imp: model.Import) !void {
         }
         existing.test_refs += imp.test_refs;
         existing.prod_refs += imp.prod_refs;
+        if (imp.exported) existing.exported = true;
         return;
     }
     try file.imports.append(model_ptr.gpa, imp);
@@ -727,12 +728,15 @@ fn extractImports(
         const lit = ast.tokenSlice(ast.nodeMainToken(params[0]));
         if (lit.len < 2) continue;
         const offset = ast.tokenStart(ast.nodeMainToken(init));
+        const is_pub = vd.ast.mut_token > 0 and
+            mem.eql(u8, ast.tokenSlice(vd.ast.mut_token - 1), "pub");
         try addImport(model_ptr, file_idx, .{
             .raw = lit[1 .. lit.len - 1],
             .alias = ast.tokenSlice(vd.ast.mut_token + 1),
             .line = Model.lineOf(source, offset),
             .offset = offset,
             .in_test = insideNamedTestSpan(test_spans, offset),
+            .exported = is_pub,
         });
     }
 
@@ -1362,4 +1366,18 @@ test "unnamed test registration imports stay file-scope" {
             return error.TestUnexpectedImport;
         }
     }
+}
+
+test "marks public import aliases as exported" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const m = try extractTestSource(alloc,
+        \\pub const public_helper = @import("public.zig");
+        \\const private_helper = @import("private.zig");
+    );
+
+    try std.testing.expect((try importByAlias(&m, 0, "public_helper")).exported);
+    try std.testing.expect(!(try importByAlias(&m, 0, "private_helper")).exported);
 }
