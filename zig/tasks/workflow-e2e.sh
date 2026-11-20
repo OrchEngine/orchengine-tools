@@ -80,16 +80,16 @@ fi
 test -f "$tmp/generated/e2e_workflow_gen.zig"
 test -f "$tmp/generated/e2e_conditional_workflow_gen.zig"
 test -f "$tmp/generated/e2e-dashed_workflow_gen.zig"
-test -f "$tmp/generated/run.zig"
+test -f "$tmp/generated/workflows.zig"
 test -f "$tmp/generated/registry.zon"
-grep -q 'name, "e2e"' "$tmp/generated/run.zig"
-grep -q 'name, "e2e_conditional"' "$tmp/generated/run.zig"
-grep -q 'name, "e2e-dashed"' "$tmp/generated/run.zig"
-grep -q 'const e2e_dashed = @import("e2e-dashed_workflow_gen.zig")' "$tmp/generated/run.zig"
+grep -q 'pub const manifest' "$tmp/generated/workflows.zig"
+grep -q '@import("e2e_workflow_gen.zig")' "$tmp/generated/workflows.zig"
+grep -q '@import("e2e_conditional_workflow_gen.zig")' "$tmp/generated/workflows.zig"
+grep -q '@import("e2e-dashed_workflow_gen.zig")' "$tmp/generated/workflows.zig"
 grep -A1 'name = "e2e",' "$tmp/generated/registry.zon" | grep -q 'event = "orchengine.events.v1.OrderReceived"'
 grep -A1 'name = "e2e_conditional",' "$tmp/generated/registry.zon" | grep -q 'event = "orchengine.events.v1.NameSubmitted"'
 
-zig build -p "$tmp/prefix" -Dworkflows-root=.tmp/workflow-e2e/generated/run.zig
+zig build -p "$tmp/prefix" -Dworkflows-root=.tmp/workflow-e2e/generated/workflows.zig
 
 printf 'customer_name: "  Ada   Lovelace "\nemail: "ada@example.com"\n' > "$tmp/input.text"
 "$tmp/prefix/bin/orchengine" encode \
