@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Run the unit tests compiled into the OrchEngine custom zlint rules.
+set -euo pipefail
+
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${ZLINT_DIR:-}" ]; then
+    zlint_dir="$ZLINT_DIR"
+else
+    zlint_dir="$("$src/zlint-src")"
+fi
+
+if [ ! -f "$zlint_dir/build.zig" ]; then
+    echo "zlint-rules-test: not a zlint checkout: $zlint_dir" >&2
+    echo "set ZLINT_DIR to an OrchEngine/zlint checkout" >&2
+    exit 1
+fi
+
+args=()
+for rule in "$src"/zlint_rules/*.zig; do
+    args+=("-Dcustom_rules=$rule")
+done
+
+cd "$zlint_dir"
+zig build test-custom-rules "${args[@]}"
