@@ -46,6 +46,7 @@ Rules:
 - `production_file_size.zig`, `max_file_imports.zig`
 - `forbid_casts.zig`, `mutual_type_cycles.zig`,
   `uncalled_private_function.zig`
+- `std_aliases.zig`, `no_deprecated.zig` (detection-only; no autofix)
 
 Build:
 
@@ -60,6 +61,16 @@ ZLINT_DIR=/path/to/zlint ~/Projects/orchengine-tools/zig/zlint-rules-build
 The binary is written to `zig/bin/zlint-orche`. zlint compiles custom rules as
 static inputs; pass one `-Dcustom_rules=<path>` flag per rule. Comma-separated
 paths do not work.
+
+Custom rule tests:
+
+```bash
+# uses the pinned zlint checkout
+~/Projects/orchengine-tools/zig/zlint-rules-test
+
+# custom zlint checkout
+ZLINT_DIR=/path/to/zlint ~/Projects/orchengine-tools/zig/zlint-rules-test
+```
 
 Strict parity:
 
