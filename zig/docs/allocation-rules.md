@@ -91,30 +91,16 @@ transfer fails, the ones that already succeeded are owned by nobody, and their s
 emptied, so no `deinit` can reach them.
 
 **10. Temporary allocation is `scratch`: local, bounded, and owned by the outer function.**
-A function that allocates only for the duration of the call names its fallback allocator `scratch`,
-not `allocator`: `allocator` says memory may be handed back, `scratch` says nothing outlives the
-call. When it is a parameter, it follows the allocator-first convention: first, or immediately after
-`self`. The bound is built locally: a `FixedBufferAllocator` over a stack buffer sized by an
-asserted bound, or, when the size cannot be asserted, a `BufferFirstAllocator` over a stack buffer
-with an educated guess and `scratch` as the fallback. The wrapper is never a parameter, a field, or
-a return type — taking it from outside would move the buffer's lifetime into the caller and make the
-bound their problem. A fixed buffer that overflows is an error, never a silent truncation.
-
-The name, the bound, and the defensive posture are one argument. A temporary named `allocator` and
-sized by whatever the caller passes is invisible at the call site, and it silently depends on the
-caller using an arena — a property of today's caller, not of the function. The bound belongs to the
-work: only the function knows how much temporary space it needs, so only the function can choose the
-buffer. Keeping the wrapper local also means the caller never has to construct, size, or outlive it,
-and the function stays correct when `scratch` is a GPA.
-
-When an API has an outer function and the inner functions it calls, they must agree on who allocates
-that temporary memory. The outer function may create and own it; the inner functions take it as a
-parameter, so they can be called on their own. If the inner function allocates its own scratch, the
-outer cannot control the lifetime and two allocations happen where one was intended; if the inner
-expects a field the outer set, it cannot be called alone and every caller has to copy the outer's
-prologue and can get it wrong. Scratch used by one function in one call is a local, never a field:
-a field widens the type's state and makes every caller reproduce the setup. A field that is cleared
-at entry also makes the function non-reentrant, so a nested call wipes the outer call's state.
+`scratch` names memory that dies with the call; `allocator` names memory the caller keeps. A
+function that allocates only for its own duration builds the bound locally: a
+`FixedBufferAllocator` over a stack buffer with an asserted size, or a `BufferFirstAllocator` over
+an educated guess with `scratch` as the fallback. The wrapper is never a parameter, a field, or a
+return type — that moves the buffer's lifetime to the caller and makes the bound their problem —
+and an overflow is an error, never a silent truncation. When several functions share the scratch,
+the outer function creates and frees it and the inner functions take it as a parameter, so each can
+be called alone; a field instead widens the type's state, and a nested call wipes the outer call's
+state. When it is a parameter, `scratch` follows the allocator-first convention: first, or
+immediately after `self`.
 
 **11. Repeated work must not grow memory.**
 A repeated operation on a reused region must reach a steady state. Growth across identical runs is
