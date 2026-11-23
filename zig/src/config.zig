@@ -257,7 +257,7 @@ test "parse test roots and test-only severity" {
     var m = testModel(arena.allocator());
 
     try parse(&m,
-        \\{"test_roots":["src/unit_tests.zig","customworkflows/generated.zig"],"project_rules":{"test-only-import":"error"}}
+        \\{"test_roots":["src/unit_tests.zig","customworkflows/generated_tests.zig"],"project_rules":{"test-only-import":"error"}}
     );
     try m.validateProjectConfig();
 

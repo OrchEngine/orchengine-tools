@@ -52,7 +52,6 @@ pub const project_rule_ids = [_][]const u8{
 pub const default_test_roots = [_][]const u8{
     "src/unit_tests.zig",
     "src/integration_tests.zig",
-    "customworkflows/generated.zig",
 };
 
 pub const Settings = struct {
@@ -558,9 +557,9 @@ test "test roots honor defaults and configured globs" {
 
     try std.testing.expect(m.isTestRoot("src/unit_tests.zig"));
     try std.testing.expect(m.isTestRoot("src/integration_tests.zig"));
-    try std.testing.expect(m.isTestRoot("customworkflows/generated.zig"));
     try std.testing.expect(m.isTestRoot("nested/integration_tests.zig"));
     try std.testing.expect(!m.isTestRoot("src/unit_test_helpers.zig"));
+    try std.testing.expect(!m.isTestRoot("customworkflows/generated_tests.zig"));
 
     try m.config.test_roots.append(alloc, "src/test/**");
     try std.testing.expect(m.isTestRoot("src/test/helpers.zig"));
