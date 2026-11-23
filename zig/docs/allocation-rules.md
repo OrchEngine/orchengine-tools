@@ -2,119 +2,28 @@
 
 **Scope:** `OrchEngine/orchengine-tools`.
 
-Each rule is a statement and its reason, followed by a direct example. The rules are the
-contract; the examples show the shape they forbid and the shape they require. Rules are numbered
-in reading order; do not renumber.
+Each rule is a statement, its reason, and its example, in that order. The rules are the contract;
+the examples show the shape they forbid and the shape they require. Rules are numbered in reading
+order; do not renumber.
 
 ## Rules
 
-**1. A capability lives at the boundary, never on a data type.**
+### 1. A capability lives at the boundary, never on a data type.
+
 A capability is a handle to authority: an `Allocator`, `std.Io` (files, network, clocks,
 randomness, concurrency), an `Io.Writer`/`Reader`, a `Dir`, a `File`, a `Clock`, or anything else
-that lets the holder allocate, do I/O, or read the environment. A stored handle grants that
-authority to every method, and it stays valid only while the provider lives and only if the
-provider is thread-safe when shared — facts known only where the provider is created. So only a
-type that is itself part of the boundary may store one: the root, a job, a builder, or a struct
-created and destroyed inside one call. Tests and benches own their scope and may store one. A data,
-config, plan, event, or record type is built from data and outlives that boundary, so it takes the
-capability as a parameter on the call that needs it; a field there asserts a lifetime and
-thread-safety contract the type cannot check.
+that lets the holder allocate, do I/O, or read the environment.
 
-**2. One `init`, one `deinit`, and the signature follows storage.**
-If release is not reachable from the type, the caller must read the parent function to know how to
-clean up; that knowledge does not survive a refactor, and under an arena the leak is silent. If the
-type stores its allocator, taking another one in `deinit` offers a second release path through a
-handle that may not be the one that allocated. One constructor and one destructor, matching how the
-capability is held, make ownership a property of the type.
-
-**3. An arena lives in one named scope, is never copied, and its handle never outlives it.**
-An arena is created at a boundary, used inside it, and deinited or reset at its end. The boundary is
-named where the arena is created: per request, per job, per command, per generated workflow, per
-bench iteration. A scope that repeats resets rather than deinits; an arena that is not the process
-root and has no stated end is a leak with extra steps. The handle stores `&arena`, so returning
-`arena.allocator()` from a function whose arena is local, storing an `ArenaAllocator` by value,
-copying an arena after taking its handle, or keeping a slice past `deinit` all point the handle at
-state that is no longer the live one: allocations land in a list nobody frees, or `deinit` frees a
-different list, and the type system cannot tell the copies apart. A nested lifetime gets its own
-sub-arena, which bounds the scope and keeps growth out of the parent — but when its child is another
-arena's allocator, its `deinit` is a no-op at the parent: it gives a clear logical lifetime, not
-returned memory. To actually reclaim, the sub-arena's child must be an allocator that frees, or the
-parent must `reset`.
-
-**4. A stateful handle passes by pointer; only an owning wrapper holds it by value.**
-Copying a handle that carries a cursor, buffer, or position creates two independent states over the
-same resource; one copy can advance or flush state the other still believes is pending. An owning
-wrapper is the exception, because it is the single place that holds the state.
-
-**5. A capability reachable from several threads must be thread-safe.**
-A handle carries no thread-safety guarantee, and arenas are not thread-safe. Sharing a per-job arena
-across workers is a data race on the arena's state, not only a lifetime bug.
-
-**6. Release unconditionally, and order arena allocations so the release can take effect.**
-A function frees what it allocates on every path, whatever allocator it received: an arena turns
-`free` into a no-op, not into permission to skip it. Under an arena only the most recent allocation
-can be freed or remapped, so order large temporaries last and free them as soon as they are done.
-Do not use `free` as general reclamation: for anything that is not last, it does nothing.
-
-**7. A type either owns a closed list of allocations and deinits infallibly, or it is a view.**
-`deinit` promises the type can release everything it owns, which is only true when the owned memory
-is reachable from its fields as a closed list. If a field can own memory the type cannot see, the
-list cannot be written and the `deinit` is either incomplete (leaks) or frees memory it does not own
-(double free); if the fields alias other owners, a `deinit` would free memory it does not own. In
-both cases the type is a view, and the honest API documents what must outlive it. For the types that
-do own, `deinit` releases what they own and returns `void`: teardown that can fail — flush, commit,
-fsync, close — is a named method (`finish`, `commit`, `close`) the caller invokes before `deinit`,
-and `deinit` remains safe afterwards. `defer` cannot propagate an error, so a fallible `deinit`
-either swallows its error, which is silent data loss, or forces every caller to hand-write teardown
-on every path, which is what rule 6 exists to prevent. Allocating in `deinit` creates a second owner
-and an `OutOfMemory` with nowhere to go.
-
-**8. Every allocation set has a named owner, and the signature says so.**
-Memory stays valid only while some value keeps it alive. Name that value in the API: either return
-an owner type the caller deinits, or take an arena whose lifetime the caller controls. "The
-allocator" alone does not say when the memory dies — the same handle can be a request arena, a job
-arena, or a test allocator, and the same function is called with all three. The return is either an
-owner type — `Owned(T)`, `Parsed(T)`, or any type with a `deinit` — or the function name ends in
-`Leaky`. Ownership that is invisible in the signature is discovered by leaking, and the signature is
-the only place a caller looks, so the contract has to be there.
-
-**9. Ownership moves by emptying the source; anything unmarked is a borrow.**
-A transfer gives the receiver an owner type or an owned slice and leaves the source unable to
-release that memory again: `toOwnedSlice` resets the list, `take` clears the optional. A borrow
-returns or passes a view and transfers nothing, so the borrower must not free it or keep it past
-the owner's release. Zig copies structs, so a move is a protocol rather than a language feature:
-the emptying step is what makes it a move, and the name (`toOwnedSlice`, `take`, `into`) is the
-only signal at the call site. Without it, a transfer leaves two owners of one allocation — a double
-free on a real allocator, invisible under an arena — and a borrow mistaken for a transfer is freed
-through a pointer the owner still uses. A partly finished transfer is the leak case: when a later
-transfer fails, the ones that already succeeded are owned by nobody, and their sources were
-emptied, so no `deinit` can reach them.
-
-**10. Temporary allocation is `scratch`: local, bounded, and owned by the outer function.**
-`scratch` names memory that dies with the call; `allocator` names memory the caller keeps. A
-function that allocates only for its own duration builds the bound locally: a
-`FixedBufferAllocator` over a stack buffer with an asserted size, or a `BufferFirstAllocator` over
-an educated guess with `scratch` as the fallback. The wrapper is never a parameter, a field, or a
-return type — that moves the buffer's lifetime to the caller and makes the bound their problem —
-and an overflow is an error, never a silent truncation. When several functions share the scratch,
-the outer function creates and frees it and the inner functions take it as a parameter, so each can
-be called alone; a field instead widens the type's state, and a nested call wipes the outer call's
-state. When it is a parameter, `scratch` follows the allocator-first convention: first, or
-immediately after `self`.
-
-**11. Repeated work must not grow memory.**
-A repeated operation on a reused region must reach a steady state. Growth across identical runs is
-a leak or retained scratch; it does not appear in a single-run measurement and compounds in a
-long-lived process.
-
-**12. Every owner is tested on a leak-checking allocator.**
-Test owners with `std.testing.allocator`, not inside an arena. An arena absorbs leaks and turns
-double frees into no-ops, so an arena-wrapped test cannot see them; a leak-checking allocator
-reports leaks, double and invalid frees, and writes after free with the allocation's stack trace.
-
-## Examples
-
-### 1. Capability storage
+- A stored handle grants that authority to every method, and it stays valid only while the provider
+  lives and only if the provider is thread-safe when shared — facts known only where the provider
+  is created.
+- Only a type that is part of the boundary may store one: the root, a job, a builder, or a struct
+  created and destroyed inside one call. Tests and benches own their scope and may store one.
+- A data, config, plan, event, or record type is built from data and outlives that boundary, so it
+  takes the capability as a parameter on the call that needs it; a field there asserts a lifetime
+  and thread-safety contract the type cannot check.
+- A stateful capability such as `std.Io.Writer` still passes by pointer even at the boundary
+  (rule 4).
 
 ```zig
 // Violation: a record type carries authority it cannot vouch for.
@@ -139,7 +48,14 @@ const Validator = struct {
 };
 ```
 
-### 2. Destructor signature
+### 2. One `init`, one `deinit`, and the signature follows storage.
+
+- If release is not reachable from the type, the caller must read the parent function to know how
+  to clean up; that knowledge does not survive a refactor, and under an arena the leak is silent.
+- If the type stores its allocator, taking another one in `deinit` offers a second release path
+  through a handle that may not be the one that allocated.
+- One constructor and one destructor, matching how the capability is held, make ownership a
+  property of the type.
 
 ```zig
 // Stores the allocator: deinit takes none.
@@ -160,7 +76,19 @@ fn deinit(self: *PoolRuntime, allocator: Allocator) void {
 }
 ```
 
-### 3. Arena lifetime
+### 3. An arena lives in one named scope, is never copied, and its handle never outlives it.
+
+- An arena is created at a boundary and deinited or reset at its end: per request, per job, per
+  command, per generated workflow, per bench iteration. An arena that is not the process root and
+  has no stated end is a leak with extra steps.
+- A scope that repeats resets rather than deinits.
+- The handle stores `&arena`, so returning `arena.allocator()` from a function whose arena is local,
+  storing an `ArenaAllocator` by value, copying an arena after taking its handle, or keeping a slice
+  past `deinit` all point the handle at state that is no longer the live one. The type system cannot
+  tell the copies apart.
+- A nested lifetime gets its own sub-arena, which bounds the scope and keeps growth out of the
+  parent — but when its child is another arena's allocator, its `deinit` is a no-op at the parent.
+  To reclaim, the child must be an allocator that frees, or the parent must `reset`.
 
 ```zig
 // Violation: &arena is on the stack that just ended.
@@ -175,10 +103,11 @@ defer arena.deinit();
 const allocator = arena.allocator();
 try runCommand(allocator);   // nothing outlives this block
 
-// A repeating scope resets instead of deiniting.
+// A repeating scope resets instead of deiniting; callees take an Allocator,
+// so they never need to know the arena exists.
 for (workflows) |workflow| {
     _ = arena.reset(.retain_capacity);
-    try generate(&arena, workflow);
+    try generate(arena.allocator(), workflow);
 }
 
 // Violation: the value is copied after a handle was taken.
@@ -194,7 +123,11 @@ var sub = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 defer sub.deinit();
 ```
 
-### 4. Stateful handles
+### 4. A stateful handle passes by pointer; only an owning wrapper holds it by value.
+
+- Copying a handle that carries a cursor, buffer, or position creates two independent states over
+  the same resource; one copy can advance or flush state the other still believes is pending.
+- An owning wrapper is the exception, because it is the single place that holds the state.
 
 ```zig
 // Violation: the copy has its own cursor; each flush writes the same buffer twice.
@@ -208,7 +141,11 @@ fn write(writer: *std.Io.Writer, text: []const u8) !void {
 }
 ```
 
-### 5. Thread safety
+### 5. A capability reachable from several threads must be thread-safe.
+
+- A handle carries no thread-safety guarantee, and arenas are not thread-safe.
+- Sharing a per-job arena across workers is a data race on the arena's state, not only a lifetime
+  bug.
 
 ```zig
 // Violation: one arena shared by workers; its cursor and node list race.
@@ -221,7 +158,13 @@ for (workers) |worker| {
 }
 ```
 
-### 6. Release and order
+### 6. Release unconditionally, and order arena allocations so the release can take effect.
+
+- A function frees what it allocates on every path, whatever allocator it received: an arena turns
+  `free` into a no-op, not into permission to skip it.
+- Under an arena only the most recent allocation can be freed or remapped, so order large
+  temporaries last and free them as soon as they are done.
+- Do not use `free` as general reclamation: for anything that is not last, it does nothing.
 
 ```zig
 // Violation: skipping the release because the caller might pass an arena.
@@ -237,7 +180,19 @@ const large = try allocator.alloc(u8, 4096);
 defer allocator.free(large);            // runs first, while it is the last allocation
 ```
 
-### 7. Owner, view, and the destructor contract
+### 7. A type either owns a closed list of allocations and deinits infallibly, or it is a view.
+
+- `deinit` can release everything only when the owned memory is reachable from the type's fields as
+  a closed list.
+- A field that can own memory the type cannot see makes `deinit` incomplete (leaks) or over-broad
+  (double free); aliased fields would free memory the type does not own. Both cases mean the type
+  is a view, and the honest API documents what must outlive it.
+- For owners, `deinit` releases what they own and returns `void`: teardown that can fail — flush,
+  commit, fsync, close — is a named method (`finish`, `commit`, `close`) the caller invokes before
+  `deinit`.
+- `defer` cannot propagate an error, so a fallible `deinit` either swallows it, which is silent
+  data loss, or forces hand-written teardown on every path, which is what rule 6 prevents.
+  Allocating in `deinit` creates a second owner and an `OutOfMemory` with nowhere to go.
 
 ```zig
 // Owner: every allocation is reachable from a field, and deinit cannot fail.
@@ -280,7 +235,15 @@ try sink.finish();
 defer sink.deinit();
 ```
 
-### 8. Named owner
+### 8. Every allocation set has a named owner, and the signature says so.
+
+- Name the owner in the API: return an owner type the caller deinits, or take an arena whose
+  lifetime the caller controls.
+- "The allocator" alone does not say when the memory dies — the same handle can be a request arena,
+  a job arena, or a test allocator, and the same function is called with all three.
+- The return is an owner type — `Owned(T)`, `Parsed(T)`, or any type with a `deinit` — or the
+  function name ends in `Leaky`. Ownership that is invisible in the signature is discovered by
+  leaking, and the signature is the only place a caller looks.
 
 ```zig
 // Unnamed: the allocator says nothing about the lifetime.
@@ -301,10 +264,21 @@ fn render(allocator: Allocator, plan: *const Plan) ![]u8;
 fn render(allocator: Allocator, plan: *const Plan) !Owned([]u8);
 
 // Visible in the name.
-fn renderLeaky(allocator: Allocator, plan: *const Plan) []u8;
+fn renderLeaky(allocator: Allocator, plan: *const Plan) ![]u8;
 ```
 
-### 9. Transfer and borrow
+### 9. Ownership moves by emptying the source; anything unmarked is a borrow.
+
+- A transfer gives the receiver an owner type or an owned slice and leaves the source unable to
+  release that memory again: `toOwnedSlice` resets the list, `take` clears the optional. The name is
+  the only signal at the call site.
+- A borrow returns or passes a view and transfers nothing; the borrower must not free it or keep it
+  past the owner's release.
+- Without the emptying step, a transfer leaves two owners of one allocation — a double free on a
+  real allocator, invisible under an arena — and a borrow mistaken for a transfer is freed while
+  the owner still uses it.
+- A partly finished transfer leaks: when a later transfer fails, the ones that already succeeded
+  are owned by nobody, and their sources were emptied, so no `deinit` can reach them.
 
 ```zig
 // Transfer: toOwnedSlice empties the list, so the deferred release is a no-op.
@@ -325,7 +299,19 @@ return .{
 };
 ```
 
-### 10. Scratch
+### 10. Temporary allocation is `scratch`: local, bounded, and owned by the outer function.
+
+- `scratch` names memory that dies with the call; `allocator` names memory the caller keeps. When it
+  is a parameter, `scratch` follows the allocator-first convention: first, or immediately after
+  `self`.
+- Build the bound locally: a `FixedBufferAllocator` over a stack buffer with an asserted size, or a
+  `BufferFirstAllocator` over an educated guess with `scratch` as the fallback. An overflow is an
+  error, never a silent truncation.
+- Never take the wrapper as a parameter, a field, or a return type — that moves the buffer's
+  lifetime to the caller and makes the bound their problem.
+- The outer function creates and frees shared scratch; the inner functions take it as a parameter,
+  so each can be called alone. A field instead widens the type's state, and a nested call wipes the
+  outer call's state.
 
 ```zig
 // Asserted bound: no allocator parameter at all.
@@ -362,7 +348,13 @@ pub fn buildWithDiagnostics(
 ) !Plan;
 ```
 
-### 11. Repeated work
+### 11. Repeated work must not grow memory.
+
+- A repeated operation on a reused region must reach a steady state. Growth across identical runs
+  is a leak or retained scratch; it does not appear in a single-run measurement and compounds in a
+  long-lived process.
+- This is the multi-run form of rules 3 and 6: reset the region per item, and free temporaries in
+  reverse order.
 
 ```zig
 // Steady state: one arena, reset per item, no growth across runs.
@@ -370,11 +362,16 @@ var arena = std.heap.ArenaAllocator.init(gpa);
 defer arena.deinit();
 for (items) |item| {
     _ = arena.reset(.retain_capacity);
-    try run(&arena, item);
+    try run(arena.allocator(), item);
 }
 ```
 
-### 12. Leak-checking allocator
+### 12. Every owner is tested on a leak-checking allocator.
+
+- An arena absorbs leaks and turns double frees into no-ops, so an arena-wrapped test cannot see
+  them.
+- A leak-checking allocator reports leaks, double and invalid frees, and writes after free with the
+  allocation's stack trace.
 
 ```zig
 // Weak: the arena absorbs the leak.
@@ -408,12 +405,19 @@ test "normalize name" {
 | 11 | repeated-run memory check |
 | 12 | `std.testing.allocator` owner tests |
 
-## Open questions
+## Automation
 
-1. What definition of "owner" can a linter key on, so rules 1 and 2 are checkable rather than
-   judged?
-2. Can "a closed list of frees" (rule 7) be approximated mechanically, or is it always a judgement
-   about a type declaration?
-3. Is "a field serves one function in one call" (rule 10) decidable, or always review?
-4. What counts as an "asserted bound" for rule 10 — a comptime constant, a checked precondition at
-   entry, or either?
+Four definitions turn most of the rules into AST checks instead of judgement calls.
+
+1. **Owner.** Any struct or union with `pub fn deinit`, plus `Owned(T)`. A type without `deinit` is
+   a boundary if it holds a capability on the allowlist, and a value or view if it holds none.
+   Rules 1 and 2 then reduce to a field-type check.
+2. **Closed list.** An owner whose fields are primitives, fixed arrays, slices, and other owners is
+   checkable. A pointer or slice to a type without `deinit`, or an allocating union arm, is a
+   review finding under rule 7.
+3. **Method-local scratch.** A private field written at the start of one method, never read outside
+   that method's call tree, and never read before being overwritten, is scratch masquerading as
+   state under rule 10.
+4. **Asserted bound.** A comptime constant, or a checked precondition at entry
+   (`std.debug.assert(input.len <= max_len)` with an error return in release builds), provided the
+   buffer is provably large enough before the first allocation. Rule 10 accepts either.
