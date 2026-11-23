@@ -3,6 +3,11 @@
 Static analysis for Zig projects, built for `~/Projects/orchengine-zig`. Like
 the Go tools, nothing here is imported by the analyzed project.
 
+## Allocation rules
+
+The Zig code here follows the same allocation, ownership, and capability
+contract as the engine: [allocation-rules.md](docs/allocation-rules.md).
+
 ## orche
 
 `orche` is the tooling runner. It operates on a target checkout and keeps all
