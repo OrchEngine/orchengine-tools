@@ -8,15 +8,17 @@ in reading order; do not renumber.
 
 ## Rules
 
-**1. Store a capability only where its lifetime is known.**
-A capability is a borrowed handle to authority: an `Allocator`, `std.Io` (files, network, clocks,
-randomness, concurrency), an `Io.Writer`/`Reader`, a `Dir`, a `File`, a `Clock`, or any type that
-lets the holder allocate, perform I/O, or read the environment. Allowed places: root, owner, job,
-builder, or a call-scoped struct created and destroyed inside one call; tests and benches are
-explicit zones. A stored handle grants that authority to every method on the type, and the
-provider's lifetime and thread-safety are known only where the provider is created. A data,
-config, plan, event, or record type outlives the call and knows neither, so a capability field
-there is an unverifiable claim.
+**1. A capability lives at the boundary, never on a data type.**
+A capability is a handle to authority: an `Allocator`, `std.Io` (files, network, clocks,
+randomness, concurrency), an `Io.Writer`/`Reader`, a `Dir`, a `File`, a `Clock`, or anything else
+that lets the holder allocate, do I/O, or read the environment. A stored handle grants that
+authority to every method, and it stays valid only while the provider lives and only if the
+provider is thread-safe when shared — facts known only where the provider is created. So only a
+type that is itself part of the boundary may store one: the root, a job, a builder, or a struct
+created and destroyed inside one call. Tests and benches own their scope and may store one. A data,
+config, plan, event, or record type is built from data and outlives that boundary, so it takes the
+capability as a parameter on the call that needs it; a field there asserts a lifetime and
+thread-safety contract the type cannot check.
 
 **2. One `init`, one `deinit`, and the signature follows storage.**
 If release is not reachable from the type, the caller must read the parent function to know how to
@@ -136,7 +138,7 @@ const Event = struct {
     name: []const u8,
 };
 
-// Correct: the capability lives at the root; the record is data.
+// Correct: the capability lives at the boundary; the record is data.
 const App = struct {
     allocator: Allocator,
     io: std.Io,
@@ -407,7 +409,7 @@ test "normalize name" {
 
 | Rule | Check |
 |---|---|
-| 1 | allowlist of `path:Type.field` + zone |
+| 1 | allowlist of `path:Type.field`; review that the type is part of the boundary |
 | 2 | stored allocator and `deinit` arity agree |
 | 3 | `returned_stack_reference` (heuristic); arena scope review; sub-arena child can free |
 | 4 | stateful handle passed as a pointer |
@@ -426,7 +428,6 @@ test "normalize name" {
    judged?
 2. Can "a closed list of frees" (rule 7) be approximated mechanically, or is it always a judgement
    about a type declaration?
-3. Do rule 1's zones apply to test and bench code, or is there a separate lighter rule set?
-4. Is "a field serves one function in one call" (rule 10) decidable, or always review?
-5. What counts as an "asserted bound" for rule 10 — a comptime constant, a checked precondition at
+3. Is "a field serves one function in one call" (rule 10) decidable, or always review?
+4. What counts as an "asserted bound" for rule 10 — a comptime constant, a checked precondition at
    entry, or either?
