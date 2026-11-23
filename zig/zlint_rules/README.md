@@ -14,6 +14,7 @@ compatibility fork. Custom rules and project policy live here.
 - `max_nesting.zig`
 - `production_file_size.zig`
 - `max_file_imports.zig`
+- `deinit_returns_void.zig`
 - `forbid_casts.zig`
 - `mutual_type_cycles.zig`
 - `uncalled_private_function.zig`
