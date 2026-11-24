@@ -216,12 +216,18 @@ fn cmdTestAudit(io: Io, arena: Allocator, zig_dir: []const u8, target: []const u
 }
 
 fn cmdUiProof(io: Io, arena: Allocator, zig_dir: []const u8, target: []const u8) !void {
-    try run(io, &.{ "zig", "build" }, target);
+    // The binary embeds frontend/static/app, so the bundle has to exist before
+    // `zig build`; otherwise the proof renders the previous UI.
     try runNpm(io, arena, target, &.{ "run", "build:ui" });
+    try run(io, &.{ "zig", "build" }, target);
     try runTask(io, arena, zig_dir, "ui-proof.sh", target);
 }
 
 fn cmdTestUi(io: Io, arena: Allocator, target: []const u8, update: bool) !void {
+    // Build the bundle first: `zig build` embeds whatever is in
+    // frontend/static/app at compile time, and `test:ui` would otherwise swap
+    // the bundle after the binary was compiled, testing the previous UI.
+    try runNpm(io, arena, target, &.{ "run", "build:ui" });
     try run(io, &.{ "zig", "build" }, target);
     if (update) {
         try runNpm(io, arena, target, &.{ "run", "test:ui:update" });
