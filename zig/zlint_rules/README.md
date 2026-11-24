@@ -18,6 +18,7 @@ compatibility fork. Custom rules and project policy live here.
 - `forbid_casts.zig`
 - `mutual_type_cycles.zig`
 - `uncalled_private_function.zig`
+- `prefer_unmanaged.zig`
 
 ## Build
 
