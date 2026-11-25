@@ -22,6 +22,8 @@ jobs:
       - run: cd zig && zig build -Doptimize=ReleaseSafe
       - run: cd zig && zig build test
       - run: cd zig && ./zlint-rules-test
+      - run: cd zig && ./zlint-rules-build
+      - run: cd zig && ./bin/zlint-orche -q -c zlint.json src zlint_rules
       - run: cd zig && ./zig-out/bin/orche --help
       - name: ShellCheck
         run: |

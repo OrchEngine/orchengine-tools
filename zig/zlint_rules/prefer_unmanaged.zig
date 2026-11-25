@@ -31,6 +31,7 @@
 //! exception.
 
 const std = @import("std");
+const mem = std.mem;
 const zlint = @import("zlint");
 
 const Semantic = zlint.Semantic;
@@ -77,7 +78,7 @@ pub fn runOnNode(self: *const PreferUnmanaged, wrapper: NodeWrapper, ctx: *Linte
     const data = ctx.ast().nodeData(wrapper.idx).node_and_token;
     const name = ctx.semantic.tokenSlice(data[1]);
     for (containers) |container| {
-        if (!std.mem.eql(u8, name, container.managed)) continue;
+        if (!mem.eql(u8, name, container.managed)) continue;
         if (!resolvesToStdNamespace(ctx, data[0], "hash_map")) return;
         if (isAllowed(self, container.managed)) return;
 
@@ -92,7 +93,7 @@ pub fn runOnNode(self: *const PreferUnmanaged, wrapper: NodeWrapper, ctx: *Linte
 
 fn isAllowed(self: *const PreferUnmanaged, name: []const u8) bool {
     for (self.allow) |allowed| {
-        if (std.mem.eql(u8, allowed, name)) return true;
+        if (mem.eql(u8, allowed, name)) return true;
     }
     return false;
 }
@@ -126,7 +127,7 @@ fn getChain(ctx: *LinterContext, node: Node.Index) ?Chain {
             else => return null,
         }
     }
-    std.mem.reverse([]const u8, chain.segments[0..chain.len]);
+    mem.reverse([]const u8, chain.segments[0..chain.len]);
     return chain;
 }
 
@@ -135,13 +136,13 @@ fn getChain(ctx: *LinterContext, node: Node.Index) ?Chain {
 /// namespace the constructor lives in.
 fn resolvesToStdNamespace(ctx: *LinterContext, node: Node.Index, namespace: []const u8) bool {
     const chain = getChain(ctx, node) orelse return false;
-    if (std.mem.eql(u8, chain.segments[0], "std")) {
+    if (mem.eql(u8, chain.segments[0], "std")) {
         return tailMatches(chain.segments[1..chain.len], namespace);
     }
 
     const init = ast_utils.resolveConstAlias(ctx, chain.leftmost) orelse return false;
     const target = getChain(ctx, init) orelse return false;
-    if (!std.mem.eql(u8, target.segments[0], "std")) return false;
+    if (!mem.eql(u8, target.segments[0], "std")) return false;
 
     var tail: [8][]const u8 = undefined;
     var len: usize = 0;
@@ -159,7 +160,7 @@ fn resolvesToStdNamespace(ctx: *LinterContext, node: Node.Index, namespace: []co
 fn tailMatches(tail: []const []const u8, namespace: []const u8) bool {
     if (tail.len == 0) return true;
     if (tail.len != 1) return false;
-    return std.mem.eql(u8, tail[0], namespace);
+    return mem.eql(u8, tail[0], namespace);
 }
 
 const support = @import("tests/prefer_unmanaged_support.zig");

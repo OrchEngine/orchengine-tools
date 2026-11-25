@@ -48,6 +48,7 @@
 //! ```
 
 const std = @import("std");
+const mem = std.mem;
 const zlint = @import("zlint");
 
 const Semantic = zlint.Semantic;
@@ -79,7 +80,7 @@ const Chain = struct {
     len: usize = 0,
 
     fn startsWith(self: Chain, prefix: []const u8) bool {
-        return self.len > 0 and std.mem.eql(u8, self.segments[0], prefix);
+        return self.len > 0 and mem.eql(u8, self.segments[0], prefix);
     }
 };
 
@@ -115,8 +116,8 @@ fn getChain(ctx: *LinterContext, node: Node.Index) ?Chain {
         }
     }
 
-    std.mem.reverse([]const u8, chain.segments[0..chain.len]);
-    std.mem.reverse(TokenIndex, chain.tokens[0..chain.len]);
+    mem.reverse([]const u8, chain.segments[0..chain.len]);
+    mem.reverse(TokenIndex, chain.tokens[0..chain.len]);
     return chain;
 }
 
@@ -133,7 +134,7 @@ fn isDeclInit(ctx: *LinterContext, node: Node.Index, name: []const u8) bool {
         if (init != node) continue;
 
         const name_token = var_decl.ast.mut_token + 1;
-        return std.mem.eql(u8, name, ctx.semantic.tokenSlice(name_token));
+        return mem.eql(u8, name, ctx.semantic.tokenSlice(name_token));
     }
     return false;
 }
@@ -145,10 +146,10 @@ fn hasTopLevelAlias(ctx: *LinterContext, name: []const u8, expected: []const u8)
     for (ast.rootDecls()) |decl| {
         const var_decl = ast.fullVarDecl(decl) orelse continue;
         const name_token = var_decl.ast.mut_token + 1;
-        if (!std.mem.eql(u8, name, ctx.semantic.tokenSlice(name_token))) continue;
+        if (!mem.eql(u8, name, ctx.semantic.tokenSlice(name_token))) continue;
 
         const init = var_decl.ast.init_node.unwrap() orelse continue;
-        if (std.mem.eql(u8, expected, ast.getNodeSource(init))) return true;
+        if (mem.eql(u8, expected, ast.getNodeSource(init))) return true;
     }
     return false;
 }
@@ -165,7 +166,7 @@ fn hasAllocatorAlias(ctx: *LinterContext) bool {
 /// Does the chain's left-most identifier resolve to `std.mem`?
 fn resolvesToStdMem(ctx: *LinterContext, chain: Chain) bool {
     const init = ast_utils.resolveConstAlias(ctx, chain.leftmost) orelse return false;
-    return std.mem.eql(u8, "std.mem", ctx.ast().getNodeSource(init));
+    return mem.eql(u8, "std.mem", ctx.ast().getNodeSource(init));
 }
 
 fn chainSpan(ctx: *LinterContext, chain: Chain) zlint.span.Span {
@@ -213,7 +214,7 @@ pub fn runOnNode(_: *const StdAliases, wrapper: NodeWrapper, ctx: *LinterContext
 
     // `std.mem` used as a value, outside of `const mem = std.mem;`.
     if (chain.startsWith("std") and chain.len == 2 and
-        std.mem.eql(u8, chain.segments[1], "mem") and
+        mem.eql(u8, chain.segments[1], "mem") and
         !isDeclInit(ctx, node, "mem"))
     {
         ctx.report(memNamespaceDiagnostic(ctx, chain));
@@ -221,8 +222,8 @@ pub fn runOnNode(_: *const StdAliases, wrapper: NodeWrapper, ctx: *LinterContext
     }
 
     // `std.mem.<member>`
-    if (chain.startsWith("std") and chain.len >= 3 and std.mem.eql(u8, chain.segments[1], "mem")) {
-        if (chain.len == 3 and std.mem.eql(u8, chain.segments[2], "Allocator")) {
+    if (chain.startsWith("std") and chain.len >= 3 and mem.eql(u8, chain.segments[1], "mem")) {
+        if (chain.len == 3 and mem.eql(u8, chain.segments[2], "Allocator")) {
             ctx.report(allocatorDiagnostic(ctx, chain));
             return;
         }
@@ -235,7 +236,7 @@ pub fn runOnNode(_: *const StdAliases, wrapper: NodeWrapper, ctx: *LinterContext
 
     // `mem.Allocator`, but only when `mem` resolves to `std.mem`.
     if (chain.len == 2 and chain.startsWith("mem") and
-        std.mem.eql(u8, chain.segments[1], "Allocator") and
+        mem.eql(u8, chain.segments[1], "Allocator") and
         !isDeclInit(ctx, node, "Allocator") and
         resolvesToStdMem(ctx, chain))
     {
