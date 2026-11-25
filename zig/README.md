@@ -51,6 +51,7 @@ Rules:
 - `production_file_size.zig`, `max_file_imports.zig`
 - `forbid_casts.zig`, `mutual_type_cycles.zig`,
   `uncalled_private_function.zig`
+- `assert_density.zig`
 - `std_aliases.zig`, `no_deprecated.zig` (detection-only; no autofix)
 
 Build:

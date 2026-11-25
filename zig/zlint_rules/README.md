@@ -15,6 +15,8 @@ compatibility fork. Custom rules and project policy live here.
 - `production_file_size.zig`
 - `max_file_imports.zig`
 - `deinit_returns_void.zig`
+- `assert_density.zig` — assertion density and zero-assert functions, with a
+  token-hash baseline
 - `forbid_casts.zig`
 - `mutual_type_cycles.zig`
 - `uncalled_private_function.zig`
