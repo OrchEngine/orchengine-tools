@@ -38,6 +38,7 @@
 //! ```
 
 const std = @import("std");
+const mem = std.mem;
 const zlint = @import("zlint");
 const ast_utils = zlint.linter.ast_utils;
 
@@ -65,7 +66,7 @@ pub fn runOnNode(self: *const DeinitReturnsVoid, wrapper: NodeWrapper, ctx: *Lin
     const proto = ast.fullFnProto(&buf, wrapper.idx) orelse return;
 
     const name_token = proto.name_token orelse return;
-    if (!std.mem.eql(u8, ctx.semantic.tokenSlice(name_token), "deinit")) return;
+    if (!mem.eql(u8, ctx.semantic.tokenSlice(name_token), "deinit")) return;
 
     // No return type is `void`.
     const return_type = proto.ast.return_type.unwrap() orelse return;
@@ -96,7 +97,7 @@ pub fn runOnNode(self: *const DeinitReturnsVoid, wrapper: NodeWrapper, ctx: *Lin
 
 fn isVoidLiteral(ast: *const zlint.Semantic.Ast, ctx: *LinterContext, node: zlint.Semantic.Ast.Node.Index) bool {
     if (ast.nodeTag(node) != .identifier) return false;
-    return std.mem.eql(u8, ctx.semantic.tokenSlice(ast.nodeMainToken(node)), "void");
+    return mem.eql(u8, ctx.semantic.tokenSlice(ast.nodeMainToken(node)), "void");
 }
 
 pub fn rule(self: *DeinitReturnsVoid) Rule {

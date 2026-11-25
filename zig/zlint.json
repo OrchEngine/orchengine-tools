@@ -1,0 +1,10 @@
+{
+  "ignore": [
+    "zlint_rules/tests/**",
+    "zlint_rules/testdata/**"
+  ],
+  "rules": {
+    "std-aliases": "error",
+    "no-deprecated": "error"
+  }
+}

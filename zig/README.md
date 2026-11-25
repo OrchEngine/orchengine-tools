@@ -77,6 +77,18 @@ Custom rule tests:
 ZLINT_DIR=/path/to/zlint ~/Projects/orchengine-tools/zig/zlint-rules-test
 ```
 
+Linting this repository:
+
+```bash
+./zlint-rules-build
+./bin/zlint-orche -q -c zlint.json src zlint_rules
+```
+
+`zlint.json` enables `std-aliases` and `no-deprecated` for the tooling source.
+The rule tests and their fixtures under `zlint_rules/tests/` and
+`zlint_rules/testdata/` are intentionally excluded because they contain
+violating examples.
+
 Strict parity:
 
 ```bash

@@ -64,6 +64,7 @@
 //! ```
 
 const std = @import("std");
+const mem = std.mem;
 const zlint = @import("zlint");
 
 const Semantic = zlint.Semantic;
@@ -389,7 +390,7 @@ const Chain = struct {
     len: usize = 0,
 
     fn startsWith(self: Chain, prefix: []const u8) bool {
-        return self.len > 0 and std.mem.eql(u8, self.segments[0], prefix);
+        return self.len > 0 and mem.eql(u8, self.segments[0], prefix);
     }
 };
 
@@ -439,8 +440,8 @@ fn getChain(ctx: *LinterContext, node: Node.Index) ?Chain {
         }
     }
 
-    std.mem.reverse([]const u8, chain.segments[0..chain.len]);
-    std.mem.reverse(TokenIndex, chain.tokens[0..chain.len]);
+    mem.reverse([]const u8, chain.segments[0..chain.len]);
+    mem.reverse(TokenIndex, chain.tokens[0..chain.len]);
     return chain;
 }
 
@@ -498,11 +499,11 @@ fn findMatch(path: []const u8) ?Match {
         if (deprecation_map.get(path[0..end])) |entry| {
             return .{
                 .entry = entry,
-                .matched_len = std.mem.count(u8, path[0..end], ".") + 1,
+                .matched_len = mem.count(u8, path[0..end], ".") + 1,
                 .matched_end = end,
             };
         }
-        const dot = std.mem.findScalarLast(u8, path[0..end], '.') orelse return null;
+        const dot = mem.findScalarLast(u8, path[0..end], '.') orelse return null;
         end = dot;
     }
 }
@@ -516,13 +517,13 @@ fn sourcePrefixCount(chain: Chain, exp: Expansion, matched_len: usize) usize {
 }
 
 fn isSameNamespace(entry: Deprecation, matched_key: []const u8) bool {
-    const matched_dot = std.mem.findScalarLast(u8, matched_key, '.') orelse return false;
-    const replacement_dot = std.mem.findScalarLast(u8, entry.replacement, '.') orelse return false;
-    return std.mem.eql(u8, matched_key[0..matched_dot], entry.replacement[0..replacement_dot]);
+    const matched_dot = mem.findScalarLast(u8, matched_key, '.') orelse return false;
+    const replacement_dot = mem.findScalarLast(u8, entry.replacement, '.') orelse return false;
+    return mem.eql(u8, matched_key[0..matched_dot], entry.replacement[0..replacement_dot]);
 }
 
 fn lastReplacementSegment(entry: Deprecation) []const u8 {
-    const dot = std.mem.findScalarLast(u8, entry.replacement, '.') orelse return entry.replacement;
+    const dot = mem.findScalarLast(u8, entry.replacement, '.') orelse return entry.replacement;
     return entry.replacement[dot + 1 ..];
 }
 
@@ -558,7 +559,7 @@ fn buildDisplay(
     if (!entry.is_std_path) return entry.replacement;
 
     if (isSameNamespace(entry, matched_key)) {
-        const dot = std.mem.findScalarLast(u8, source_prefix, '.') orelse return entry.replacement;
+        const dot = mem.findScalarLast(u8, source_prefix, '.') orelse return entry.replacement;
         const replacement = lastReplacementSegment(entry);
         const prefix_len = dot + 1;
         if (prefix_len + replacement.len > buf.len) return null;
