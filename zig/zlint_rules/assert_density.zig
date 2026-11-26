@@ -5,20 +5,28 @@
 //! > Every non-trivial function should average at least two assertions, and a
 //! > non-trivial function with none is under-specified.
 //!
+//! The rule adapts JPL Rule 16: a non-trivial function needs one check. Set
+//! `min_density` to 2 to enforce the Power of Ten two-per-function average.
+//!
 //! A function is non-trivial when it has at least `min_complexity` cyclomatic
 //! complexity. Line count does not make a function non-trivial, so a long
-//! straight-line function stays trivial. Assertions are `std.debug.assert`
-//! calls, including the common `const assert = std.debug.assert;` alias, in the
-//! function body.
+//! straight-line function stays trivial.
 //!
-//! The rule reports two things:
+//! A check is either a `std.debug.assert` call (including the common
+//! `const assert = std.debug.assert;` alias) or an explicit `return error.X`.
+//! JPL Rule 16 defines an assertion as a checked condition with recovery, so an
+//! error return is the recovery half of the same pattern. Assertions document
+//! programmer invariants; error returns cover recoverable input.
 //!
-//! - a non-trivial function with zero assertions (the hard finding);
-//! - a file whose assertion density is below `min_density` (advisory).
+//! The rule reports:
+//!
+//! - a non-trivial function with no checks (the hard finding);
+//! - a file whose check density is below `min_density` (advisory; only checked
+//!   when `min_density` is greater than 1).
 //!
 //! ## Baseline
 //!
-//! `baseline` grandfathers existing zero-assert functions:
+//! `baseline` grandfathers existing zero-check functions:
 //!
 //! ```json
 //! "assert-density": ["error", {
@@ -58,12 +66,14 @@ const ast_utils = zlint.linter.ast_utils;
 
 const AssertDensity = @This();
 
-/// Total assertions must be at least `min_density * non-trivial functions`.
-min_density: u32 = 2,
+/// Total checks must be at least `min_density * non-trivial functions`.
+/// Defaults to 1, JPL Rule 16's per-function floor. Set to 2 for the Power of
+/// Ten average. Values at or below 1 disable the advisory warning.
+min_density: u32 = 1,
 /// Functions at or above this complexity are non-trivial.
 min_complexity: u32 = 5,
 allow_tests: bool = true,
-/// Grandfathered zero-assert functions. See the module docs.
+/// Grandfathered zero-check functions. See the module docs.
 baseline: []const BaselineEntry = &.{},
 
 pub const BaselineEntry = struct {
@@ -84,7 +94,7 @@ pub fn runOnce(self: *const AssertDensity, ctx: *LinterContext) void {
     const path = ctx.source.pathname orelse "";
 
     var non_trivial: u32 = 0;
-    var total_asserts: u32 = 0;
+    var total_checks: u32 = 0;
     var first_function: ?Ast.Node.Index = null;
 
     for (0..nodes.len) |i| {
@@ -99,23 +109,23 @@ pub fn runOnce(self: *const AssertDensity, ctx: *LinterContext) void {
 
         const first = ast.firstToken(idx);
         const last = ast.lastToken(idx);
-        const assert_count = countAsserts(ast, first, last);
+        const check_count = countChecks(ast, first, last);
         const complexity = complexityOf(ast, first, last);
         const lines = linesOf(ctx, first, last);
 
         if (complexity < self.min_complexity) continue;
 
         non_trivial += 1;
-        total_asserts += assert_count;
+        total_checks += check_count;
         if (first_function == null) first_function = idx;
-        if (assert_count != 0) continue;
+        if (check_count != 0) continue;
 
         const name = ast.tokenSlice(name_token);
         const fingerprint = fingerprintOf(ast, first, last);
         var fingerprint_buf: [18]u8 = undefined;
         const fingerprint_text = mem.print(&fingerprint_buf, "0x{x}", .{fingerprint}) catch unreachable;
         const diag = ctx.diagnosticf(
-            "function `{s}` has no assertions ({d} lines, complexity {d}, fingerprint {s})",
+            "function `{s}` has no assertions or error returns ({d} lines, complexity {d}, fingerprint {s})",
             .{ name, lines, complexity, fingerprint_text },
             .{ctx.spanN(idx)},
         );
@@ -128,14 +138,15 @@ pub fn runOnce(self: *const AssertDensity, ctx: *LinterContext) void {
     }
 
     if (non_trivial == 0) return;
-    if (total_asserts >= self.min_density * non_trivial) return;
+    if (self.min_density <= 1) return;
+    if (total_checks >= self.min_density * non_trivial) return;
 
     const diag = ctx.diagnosticf(
-        "assertion density is below the minimum ({d} assertions across {d} non-trivial functions, minimum {d} per function)",
-        .{ total_asserts, non_trivial, self.min_density },
+        "assertion density is below the minimum ({d} checks across {d} non-trivial functions, minimum {d} per function)",
+        .{ total_checks, non_trivial, self.min_density },
         .{ctx.spanN(first_function.?)},
     );
-    // Density is a ratchet, not the hard gate; the zero-assert floor above is.
+    // Density is a ratchet, not the hard gate; the zero-check floor above is.
     reportAt(ctx, diag, .warning);
 }
 
@@ -154,13 +165,22 @@ fn isBaselined(
     return false;
 }
 
-fn countAsserts(ast: *const Ast, first: Ast.TokenIndex, last: Ast.TokenIndex) u32 {
+fn countChecks(ast: *const Ast, first: Ast.TokenIndex, last: Ast.TokenIndex) u32 {
     var count: u32 = 0;
     var tok = first;
     while (tok <= last) : (tok += 1) {
-        if (isAssertCall(ast, tok, last)) count += 1;
+        if (isAssertCall(ast, tok, last) or isErrorReturn(ast, tok, last)) count += 1;
     }
     return count;
+}
+
+/// Counts an explicit `return error.X`, the recovery half of JPL Rule 16's
+/// `if (!c_assert(condition)) return ERROR;` pattern.
+fn isErrorReturn(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+    if (tok + 2 > last) return false;
+    if (ast.tokenTag(tok) != .keyword_return) return false;
+    if (ast.tokenTag(tok + 1) != .keyword_error) return false;
+    return ast.tokenTag(tok + 2) == .period;
 }
 
 /// Counts `std.debug.assert(...)` and the common `assert(...)` alias, which is
@@ -268,6 +288,27 @@ test AssertDensity {
         \\}
         \\
         ,
+        // One assertion is enough at the default density.
+        \\fn one(a: u32) u32 {
+        \\    std.debug.assert(a > 0);
+        \\    if (a == 1) return 1;
+        \\    if (a == 2) return 2;
+        \\    if (a == 3) return 3;
+        \\    if (a == 4) return 4;
+        \\    return 0;
+        \\}
+        \\
+        ,
+        // An explicit error return is a check too (JPL Rule 16 recovery).
+        \\fn fallible(a: u32) !u32 {
+        \\    if (a == 1) return 1;
+        \\    if (a == 2) return 2;
+        \\    if (a == 3) return 3;
+        \\    if (a == 4) return 4;
+        \\    return error.Invalid;
+        \\}
+        \\
+        ,
         // Trivial (complexity two) even with two assertions; the rule stays quiet.
         \\fn pick(a: u32, b: u32) u32 {
         \\    std.debug.assert(a > 0);
@@ -308,7 +349,7 @@ test AssertDensity {
         try support.expectPass(t.allocator, rule_value, source);
     }
 
-    // Non-trivial (complexity five), no assertions: zero floor plus density warning.
+    // Non-trivial (complexity five), no checks: the hard finding.
     const failing =
         \\fn parse(value: u32) u32 {
         \\    if (value == 1) return 1;
@@ -321,9 +362,13 @@ test AssertDensity {
     ;
 
     var fail_impl = AssertDensity{};
-    try support.expectFailCount(t.allocator, fail_impl.rule(), failing, 2);
+    try support.expectFailCount(t.allocator, fail_impl.rule(), failing, 1);
 
-    // Grandfather the function: the zero-assert finding becomes a warning.
+    // The two-per-function average is opt-in.
+    var density_impl = AssertDensity{ .min_density = 2 };
+    try support.expectFailCount(t.allocator, density_impl.rule(), failing, 2);
+
+    // Grandfather the function: the zero-check finding becomes a warning.
     const diagnostics = (try support.run(t.allocator, fail_impl.rule(), failing)).?;
     defer support.deinit(t.allocator, diagnostics);
 
@@ -338,7 +383,7 @@ test AssertDensity {
     defer if (baselined) |list| support.deinit(t.allocator, list);
 
     try t.expect(baselined != null);
-    try t.expectEqual(@as(usize, 2), baselined.?.items.len);
+    try t.expectEqual(@as(usize, 1), baselined.?.items.len);
     for (baselined.?.items) |diagnostic| {
         try t.expectEqual(Severity.warning, diagnostic.err.severity);
     }
