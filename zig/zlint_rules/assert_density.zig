@@ -5,8 +5,9 @@
 //! > Every non-trivial function should average at least two assertions, and a
 //! > non-trivial function with none is under-specified.
 //!
-//! A function is non-trivial when it is longer than `min_lines` or has at least
-//! `min_complexity` cyclomatic complexity. Assertions are `std.debug.assert`
+//! A function is non-trivial when it has at least `min_complexity` cyclomatic
+//! complexity. Line count does not make a function non-trivial, so a long
+//! straight-line function stays trivial. Assertions are `std.debug.assert`
 //! calls in the function body.
 //!
 //! The rule reports two things:
@@ -31,6 +32,17 @@
 //! function invalidates the entry and the finding becomes an error again. The
 //! diagnostic message carries the fingerprint for the baseline generator.
 //!
+//! ## Suppression
+//!
+//! Use zlint's disable directives for one-off exceptions, with a reason:
+//!
+//! ```zig
+//! // zlint-disable-next-line assert-density -- CLI dispatch, no invariants
+//! fn dispatch(...) void { ... }
+//! ```
+//!
+//! `// zlint-disable assert-density -- <reason>` disables the rule for the file.
+//!
 //! This rule is off by default and enabled by the project's `zlint.json`.
 
 const std = @import("std");
@@ -47,10 +59,8 @@ const AssertDensity = @This();
 
 /// Total assertions must be at least `min_density * non-trivial functions`.
 min_density: u32 = 2,
-/// Functions at or below this line count are trivial unless they are complex.
-min_lines: u32 = 5,
-/// Functions at or above this complexity are non-trivial even when short.
-min_complexity: u32 = 3,
+/// Functions at or above this complexity are non-trivial.
+min_complexity: u32 = 5,
 allow_tests: bool = true,
 /// Grandfathered zero-assert functions. See the module docs.
 baseline: []const BaselineEntry = &.{},
@@ -92,7 +102,7 @@ pub fn runOnce(self: *const AssertDensity, ctx: *LinterContext) void {
         const complexity = complexityOf(ast, first, last);
         const lines = linesOf(ctx, first, last);
 
-        if (lines <= self.min_lines and complexity < self.min_complexity) continue;
+        if (complexity < self.min_complexity) continue;
 
         non_trivial += 1;
         total_asserts += assert_count;
@@ -102,7 +112,7 @@ pub fn runOnce(self: *const AssertDensity, ctx: *LinterContext) void {
         const name = ast.tokenSlice(name_token);
         const fingerprint = fingerprintOf(ast, first, last);
         var fingerprint_buf: [18]u8 = undefined;
-        const fingerprint_text = std.fmt.bufPrint(&fingerprint_buf, "0x{x}", .{fingerprint}) catch unreachable;
+        const fingerprint_text = mem.print(&fingerprint_buf, "0x{x}", .{fingerprint}) catch unreachable;
         const diag = ctx.diagnosticf(
             "function `{s}` has no assertions ({d} lines, complexity {d}, fingerprint {s})",
             .{ name, lines, complexity, fingerprint_text },
@@ -235,8 +245,20 @@ test AssertDensity {
         \\}
         \\
         ,
-        // Non-trivial, two assertions, density met.
+        // Non-trivial (complexity five), two assertions, density met.
         \\fn parse(a: u32, b: u32) u32 {
+        \\    std.debug.assert(a > 0);
+        \\    std.debug.assert(b > 0);
+        \\    if (a == 1) return 1;
+        \\    if (a == 2) return 2;
+        \\    if (a == 3) return 3;
+        \\    if (a == 4) return 4;
+        \\    return b;
+        \\}
+        \\
+        ,
+        // Trivial (complexity two) even with two assertions; the rule stays quiet.
+        \\fn pick(a: u32, b: u32) u32 {
         \\    std.debug.assert(a > 0);
         \\    std.debug.assert(b > 0);
         \\    if (a > b) return a;
@@ -244,13 +266,14 @@ test AssertDensity {
         \\}
         \\
         ,
-        // Short but complex enough to be non-trivial, with two assertions.
-        \\fn pick(a: u32, b: u32) u32 {
-        \\    std.debug.assert(a > 0);
-        \\    std.debug.assert(b > 0);
-        \\    if (a == b) return a;
-        \\    if (a > b) return a;
-        \\    return b;
+        // The inline directive suppresses both findings for the next function.
+        \\// zlint-disable-next-line assert-density -- intentional dispatch
+        \\fn dispatch(value: u32) u32 {
+        \\    if (value == 1) return 1;
+        \\    if (value == 2) return 2;
+        \\    if (value == 3) return 3;
+        \\    if (value == 4) return 4;
+        \\    return 0;
         \\}
         \\
         ,
@@ -274,14 +297,14 @@ test AssertDensity {
         try support.expectPass(t.allocator, rule_value, source);
     }
 
-    // Non-trivial (six lines), no assertions: zero floor plus density warning.
+    // Non-trivial (complexity five), no assertions: zero floor plus density warning.
     const failing =
         \\fn parse(value: u32) u32 {
-        \\    if (value > 0) {
-        \\        return value;
-        \\    } else {
-        \\        return 0;
-        \\    }
+        \\    if (value == 1) return 1;
+        \\    if (value == 2) return 2;
+        \\    if (value == 3) return 3;
+        \\    if (value == 4) return 4;
+        \\    return 0;
         \\}
         \\
     ;
@@ -312,11 +335,11 @@ test AssertDensity {
     // Editing the function invalidates the baseline: the finding is an error.
     const edited =
         \\fn parse(value: u32) u32 {
-        \\    if (value > 0) {
-        \\        return value;
-        \\    } else {
-        \\        return 1;
-        \\    }
+        \\    if (value == 1) return 1;
+        \\    if (value == 2) return 2;
+        \\    if (value == 3) return 3;
+        \\    if (value == 4) return 4;
+        \\    return 1;
         \\    // Edited.
         \\}
         \\
@@ -336,9 +359,9 @@ fn fingerprintFromDiagnostics(diagnostics: zlint.linter.lint_context.Diagnostic.
     for (diagnostics.items) |diagnostic| {
         const message = diagnostic.err.message.borrow();
         const marker = "fingerprint ";
-        const start = mem.indexOf(u8, message, marker) orelse continue;
+        const start = mem.find(u8, message, marker) orelse continue;
         const rest = message[start + marker.len ..];
-        const end = mem.indexOfAny(u8, rest, " ,)") orelse rest.len;
+        const end = mem.findAny(u8, rest, " ,)") orelse rest.len;
         return rest[0..end];
     }
     @panic("assert-density diagnostic did not include a fingerprint");
