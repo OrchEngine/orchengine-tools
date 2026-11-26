@@ -13,7 +13,9 @@
 //! straight-line function stays trivial.
 //!
 //! A check is either a `std.debug.assert` call (including the common
-//! `const assert = std.debug.assert;` alias) or an explicit `return error.X`.
+//! `const assert = std.debug.assert;` alias) or any explicit error: `error.X`,
+//! a named `Error.X` set value, or a propagated error such as `return err` from
+//! a `catch |err|` or `else |err|` capture. Every form is a recovery path.
 //! JPL Rule 16 defines an assertion as a checked condition with recovery, so an
 //! error return is the recovery half of the same pattern. Assertions document
 //! programmer invariants; error returns cover recoverable input.
@@ -165,22 +167,80 @@ fn isBaselined(
     return false;
 }
 
+const capture_max = 16;
+
 fn countChecks(ast: *const Ast, first: Ast.TokenIndex, last: Ast.TokenIndex) u32 {
-    var count: u32 = 0;
+    var captures: [capture_max][]const u8 = undefined;
+    var capture_count: usize = 0;
     var tok = first;
     while (tok <= last) : (tok += 1) {
-        if (isAssertCall(ast, tok, last) or isErrorReturn(ast, tok, last)) count += 1;
+        if (!isErrorCaptureDecl(ast, tok, last) or capture_count == capture_max) continue;
+        captures[capture_count] = ast.tokenSlice(tok + 2);
+        capture_count += 1;
+    }
+
+    var count: u32 = 0;
+    tok = first;
+    while (tok <= last) : (tok += 1) {
+        if (isAssertCall(ast, tok, last) or
+            isErrorValue(ast, tok, last) or
+            isErrorSetValue(ast, tok, last) or
+            isPropagatedError(ast, tok, last, captures[0..capture_count]))
+        {
+            count += 1;
+        }
     }
     return count;
 }
 
-/// Counts an explicit `return error.X`, the recovery half of JPL Rule 16's
-/// `if (!c_assert(condition)) return ERROR;` pattern.
-fn isErrorReturn(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+/// `catch |err|` and `else |err|`: a binding for an error payload.
+fn isErrorCaptureDecl(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+    if (tok + 3 > last) return false;
+    const tag = ast.tokenTag(tok);
+    if (tag != .keyword_catch and tag != .keyword_else) return false;
+    if (ast.tokenTag(tok + 1) != .pipe) return false;
+    if (ast.tokenTag(tok + 2) != .identifier) return false;
+    return ast.tokenTag(tok + 3) == .pipe;
+}
+
+/// A named error-set value, the project's `Error.X` convention, as in
+/// `return self.fail(Error.InvalidWorkflow, ...)`.
+fn isErrorSetValue(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
     if (tok + 2 > last) return false;
+    if (ast.tokenTag(tok) != .identifier) return false;
+    if (!mem.eql(u8, ast.tokenSlice(tok), "Error")) return false;
+    if (ast.tokenTag(tok + 1) != .period) return false;
+    return ast.tokenTag(tok + 2) == .identifier;
+}
+
+/// `return err` where `err` is a captured error, or the conventional `err`
+/// binding, so a propagated error counts as the recovery.
+fn isPropagatedError(
+    ast: *const Ast,
+    tok: Ast.TokenIndex,
+    last: Ast.TokenIndex,
+    captures: []const []const u8,
+) bool {
+    if (tok + 1 > last) return false;
     if (ast.tokenTag(tok) != .keyword_return) return false;
-    if (ast.tokenTag(tok + 1) != .keyword_error) return false;
-    return ast.tokenTag(tok + 2) == .period;
+    if (ast.tokenTag(tok + 1) != .identifier) return false;
+    const name = ast.tokenSlice(tok + 1);
+    if (mem.eql(u8, name, "err")) return true;
+    for (captures) |capture| {
+        if (mem.eql(u8, capture, name)) return true;
+    }
+    return false;
+}
+
+/// Counts any error value, `error.X`, wherever it appears: `return error.X`,
+/// `orelse error.X`, `else error.X`, or a comparison. This is the recovery half
+/// of JPL Rule 16's `if (!c_assert(condition)) return ERROR;` pattern. Error
+/// set declarations (`error{...}`) have no period and do not match.
+fn isErrorValue(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+    if (tok + 2 > last) return false;
+    if (ast.tokenTag(tok) != .keyword_error) return false;
+    if (ast.tokenTag(tok + 1) != .period) return false;
+    return ast.tokenTag(tok + 2) == .identifier;
 }
 
 /// Counts `std.debug.assert(...)` and the common `assert(...)` alias, which is
@@ -306,6 +366,38 @@ test AssertDensity {
         \\    if (a == 3) return 3;
         \\    if (a == 4) return 4;
         \\    return error.Invalid;
+        \\}
+        \\
+        ,
+        // An error value in a switch `else` is a check even without `return`.
+        \\fn lookup(value: u32) !u32 {
+        \\    return switch (value) {
+        \\        1 => 1,
+        \\        2 => 2,
+        \\        3 => 3,
+        \\        4 => 4,
+        \\        else => error.Missing,
+        \\    };
+        \\}
+        \\
+        ,
+        // A named error-set value is a check: `return Error.X` in a helper style.
+        \\fn named(value: u32) !u32 {
+        \\    if (value == 1) return 1;
+        \\    if (value == 2) return 2;
+        \\    if (value == 3) return 3;
+        \\    if (value == 4) return 4;
+        \\    return Error.Invalid;
+        \\}
+        \\
+        ,
+        // A propagated captured error is a check: `catch |err| return err`.
+        \\fn propagate(value: u32) !u32 {
+        \\    if (value == 1) return 1;
+        \\    if (value == 2) return 2;
+        \\    if (value == 3) return 3;
+        \\    const parsed = step(value) catch |problem| return problem;
+        \\    return parsed;
         \\}
         \\
         ,
