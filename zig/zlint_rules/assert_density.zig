@@ -8,7 +8,8 @@
 //! A function is non-trivial when it has at least `min_complexity` cyclomatic
 //! complexity. Line count does not make a function non-trivial, so a long
 //! straight-line function stays trivial. Assertions are `std.debug.assert`
-//! calls in the function body.
+//! calls, including the common `const assert = std.debug.assert;` alias, in the
+//! function body.
 //!
 //! The rule reports two things:
 //!
@@ -157,21 +158,18 @@ fn countAsserts(ast: *const Ast, first: Ast.TokenIndex, last: Ast.TokenIndex) u3
     var count: u32 = 0;
     var tok = first;
     while (tok <= last) : (tok += 1) {
-        if (isStdDebugAssert(ast, tok, last)) count += 1;
+        if (isAssertCall(ast, tok, last)) count += 1;
     }
     return count;
 }
 
-fn isStdDebugAssert(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
-    if (tok + 4 > last) return false;
+/// Counts `std.debug.assert(...)` and the common `assert(...)` alias, which is
+/// how most codebases import it.
+fn isAssertCall(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+    if (tok + 1 > last) return false;
     if (ast.tokenTag(tok) != .identifier) return false;
-    if (!mem.eql(u8, ast.tokenSlice(tok), "std")) return false;
-    if (ast.tokenTag(tok + 1) != .period) return false;
-    if (ast.tokenTag(tok + 2) != .identifier) return false;
-    if (!mem.eql(u8, ast.tokenSlice(tok + 2), "debug")) return false;
-    if (ast.tokenTag(tok + 3) != .period) return false;
-    if (ast.tokenTag(tok + 4) != .identifier) return false;
-    return mem.eql(u8, ast.tokenSlice(tok + 4), "assert");
+    if (!mem.eql(u8, ast.tokenSlice(tok), "assert")) return false;
+    return ast.tokenTag(tok + 1) == .l_paren;
 }
 
 fn complexityOf(ast: *const Ast, first: Ast.TokenIndex, last: Ast.TokenIndex) u32 {
@@ -249,6 +247,19 @@ test AssertDensity {
         \\fn parse(a: u32, b: u32) u32 {
         \\    std.debug.assert(a > 0);
         \\    std.debug.assert(b > 0);
+        \\    if (a == 1) return 1;
+        \\    if (a == 2) return 2;
+        \\    if (a == 3) return 3;
+        \\    if (a == 4) return 4;
+        \\    return b;
+        \\}
+        \\
+        ,
+        // The common `const assert = std.debug.assert;` alias counts.
+        \\const assert = std.debug.assert;
+        \\fn aliased(a: u32, b: u32) u32 {
+        \\    assert(a > 0);
+        \\    assert(b > 0);
         \\    if (a == 1) return 1;
         \\    if (a == 2) return 2;
         \\    if (a == 3) return 3;
