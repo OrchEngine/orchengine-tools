@@ -16,6 +16,11 @@
 //! `const assert = std.debug.assert;` alias) or any explicit error: `error.X`,
 //! a named `Error.X` set value, or a propagated error such as `return err` from
 //! a `catch |err|` or `else |err|` capture. Every form is a recovery path.
+//!
+//! Failure channels that are not Zig errors also count: `@compileError`,
+//! `@errorName`, an explicit failure status assigned to `.status`, and a
+//! tagged `Fault` value returned by a validator. These are the equivalents of
+//! an error return in compile-time, HTTP, and diagnostic code.
 //! JPL Rule 16 defines an assertion as a checked condition with recovery, so an
 //! error return is the recovery half of the same pattern. Assertions document
 //! programmer invariants; error returns cover recoverable input.
@@ -179,13 +184,18 @@ fn countChecks(ast: *const Ast, first: Ast.TokenIndex, last: Ast.TokenIndex) u32
         capture_count += 1;
     }
 
+    const fault_return = hasFaultReturn(ast, first, last);
     var count: u32 = 0;
     tok = first;
     while (tok <= last) : (tok += 1) {
         if (isAssertCall(ast, tok, last) or
             isErrorValue(ast, tok, last) or
             isErrorSetValue(ast, tok, last) or
-            isPropagatedError(ast, tok, last, captures[0..capture_count]))
+            isPropagatedError(ast, tok, last, captures[0..capture_count]) or
+            isCompileError(ast, tok, last) or
+            isErrorReport(ast, tok, last) or
+            isFailureStatus(ast, tok, last) or
+            (fault_return and isFaultValue(ast, tok, last)))
         {
             count += 1;
         }
@@ -250,6 +260,73 @@ fn isAssertCall(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool
     if (ast.tokenTag(tok) != .identifier) return false;
     if (!mem.eql(u8, ast.tokenSlice(tok), "assert")) return false;
     return ast.tokenTag(tok + 1) == .l_paren;
+}
+
+/// A compile-time assertion: failing the build is the strongest recovery.
+fn isCompileError(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+    _ = last;
+    if (ast.tokenTag(tok) != .builtin) return false;
+    return mem.eql(u8, ast.tokenSlice(tok), "@compileError");
+}
+
+/// Rendering an error with `@errorName` is an explicit report of a failure,
+/// even when the error is stored in a result rather than returned.
+fn isErrorReport(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+    _ = last;
+    if (ast.tokenTag(tok) != .builtin) return false;
+    return mem.eql(u8, ast.tokenSlice(tok), "@errorName");
+}
+
+/// Unambiguous failure statuses assigned to a response or result status field.
+/// Success states (`ok`, `created`, `found`, ...) are deliberately excluded.
+const failure_statuses = [_][]const u8{
+    "bad_request",
+    "forbidden",
+    "unauthorized",
+    "not_found",
+    "conflict",
+    "unsupported_media_type",
+    "unprocessable_entity",
+    "too_many_requests",
+    "internal_server_error",
+    "service_unavailable",
+    "failed",
+};
+
+/// `.status = .forbidden` and friends: an HTTP or result failure response.
+fn isFailureStatus(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+    if (tok + 3 > last) return false;
+    if (ast.tokenTag(tok) != .identifier) return false;
+    if (!mem.eql(u8, ast.tokenSlice(tok), "status")) return false;
+    if (ast.tokenTag(tok + 1) != .equal) return false;
+    if (ast.tokenTag(tok + 2) != .period) return false;
+    if (ast.tokenTag(tok + 3) != .identifier) return false;
+    const value = ast.tokenSlice(tok + 3);
+    for (failure_statuses) |name| {
+        if (mem.eql(u8, value, name)) return true;
+    }
+    return false;
+}
+
+/// The signature of a validator whose failures are tagged `Fault` values.
+fn hasFaultReturn(ast: *const Ast, first: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+    var tok = first;
+    while (tok <= last) : (tok += 1) {
+        if (ast.tokenTag(tok) == .l_brace) return false;
+        if (ast.tokenTag(tok) != .identifier) continue;
+        if (mem.eql(u8, ast.tokenSlice(tok), "Fault")) return true;
+    }
+    return false;
+}
+
+/// `return .{ .tag = ... }` in a function returning a `Fault` union.
+fn isFaultValue(ast: *const Ast, tok: Ast.TokenIndex, last: Ast.TokenIndex) bool {
+    if (tok + 4 > last) return false;
+    if (ast.tokenTag(tok) != .keyword_return) return false;
+    if (ast.tokenTag(tok + 1) != .period) return false;
+    if (ast.tokenTag(tok + 2) != .l_brace) return false;
+    if (ast.tokenTag(tok + 3) != .period) return false;
+    return ast.tokenTag(tok + 4) == .identifier;
 }
 
 fn complexityOf(ast: *const Ast, first: Ast.TokenIndex, last: Ast.TokenIndex) u32 {
@@ -398,6 +475,48 @@ test AssertDensity {
         \\    if (value == 3) return 3;
         \\    const parsed = step(value) catch |problem| return problem;
         \\    return parsed;
+        \\}
+        \\
+        ,
+        // `@compileError` is a compile-time assertion.
+        \\fn validated(comptime T: type) void {
+        \\    if (@typeInfo(T) != .@"struct") @compileError("not a struct");
+        \\    if (!@hasDecl(T, "Input")) @compileError("no Input");
+        \\    if (!@hasDecl(T, "Output")) @compileError("no Output");
+        \\    if (!@hasDecl(T, "run")) @compileError("no run");
+        \\}
+        \\
+        ,
+        // An explicit failure status is a check.
+        \\fn guard(value: u32, res: *Response) !void {
+        \\    if (value == 1) { res.status = .bad_request; return; }
+        \\    if (value == 2) { res.status = .forbidden; return; }
+        \\    if (value == 3) { res.status = .not_found; return; }
+        \\    if (value == 4) { res.status = .conflict; return; }
+        \\    return;
+        \\}
+        \\
+        ,
+        // A reported error is a check even when stored in a result.
+        \\fn report(value: u32) void {
+        \\    if (value == 1) return;
+        \\    if (value == 2) return;
+        \\    if (value == 3) return;
+        \\    const result = work(value) catch |err| {
+        \\        record(@errorName(err));
+        \\        return;
+        \\    };
+        \\    _ = result;
+        \\}
+        \\
+        ,
+        // A tagged Fault value is a check.
+        \\fn validate(value: u32) ?Fault {
+        \\    if (value == 1) return null;
+        \\    if (value == 2) return .{ .bad_value = value };
+        \\    if (value == 3) return null;
+        \\    if (value == 4) return .{ .missing = value };
+        \\    return null;
         \\}
         \\
         ,
